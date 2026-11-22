@@ -15,6 +15,7 @@ dependencies = [
     "ollama",
     "zstandard",
     "openai",
+    "networkx",
 ]
 
 [project.optional-dependencies]

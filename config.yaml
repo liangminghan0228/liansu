@@ -11,6 +11,14 @@ llm:
 confidence_threshold: 0.7
 top_k: 5
 
+# RRF 融合（T8）：score = Σ w_i / (k + rank_i)
+rrf:
+  k: 60
+  weights:
+    bm25: 1.0
+    vector: 1.0
+    graph: 0.5
+
 # 向量模型（可换，bge-small-zh 为中文语义基线）
 embedder:
   model: BAAI/bge-small-zh-v1.5
