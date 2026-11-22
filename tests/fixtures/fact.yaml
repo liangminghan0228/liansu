@@ -1,0 +1,12 @@
+id: F-20261121-001
+subject: 梁明晗
+predicate: 求职目标城市
+object: 北京
+statement: "梁明晗决定求职目标城市定为北京"
+valid_from: 2026-11-21
+valid_to: null
+confidence: 0.92
+topics: [求职, 城市]
+source: codex://rollout-2026-11-21-xxx
+created_at: 2026-11-21T22:00:00+08:00
+supersedes: F-20261001-007

@@ -1,0 +1,35 @@
+[project]
+name = "liansu"
+version = "0.1.0"
+description = "连溯 — 以 Markdown vault 为唯一真源、以 MCP 为唯一接口、全自动抽取的本地长期记忆系统"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp",
+    "pydantic>=2",
+    "pyyaml",
+    "rank-bm25",
+    "jieba",
+    "sqlite-vec",
+    "sentence-transformers",
+    "ollama",
+    "zstandard",
+    "openai",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.scripts]
+liansu = "liansu.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/liansu"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

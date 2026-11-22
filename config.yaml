@@ -1,0 +1,23 @@
+# 连溯运行时配置 — base_url / api_key / model 支持环境变量覆盖，不硬编码
+llm:
+  default: openai_compatible
+  base_url: http://192.168.0.100:8080/v1   # IP 会变，接入前 curl /health 确认
+  api_key: dummy                            # 本地服务不校验
+  model: local                              # 服务端忽略 model 匹配，惯例填 local
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: false                # Qwen3 必加，否则 JSON 外混入思考文本
+
+confidence_threshold: 0.7
+top_k: 5
+
+# 向量模型（可换，bge-small-zh 为中文语义基线）
+embedder:
+  model: BAAI/bge-small-zh-v1.5
+
+# journal 真源目录（相对 vault_root）
+vault:
+  journal_dir: journal
+  entities_dir: entities
+  topics_dir: topics
+  brief_file: brief.md

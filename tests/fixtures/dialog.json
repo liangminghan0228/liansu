@@ -1,0 +1,10 @@
+{
+  "source": "codex://rollout-2026-11-21-xxx",
+  "turns": [
+    {"role": "user", "content": "我决定求职目标城市就定北京了，西安作为备选。"},
+    {"role": "assistant", "content": "好的，已记下：求职目标城市北京，西安备选。"},
+    {"role": "user", "content": "顺便说一下，我身高188体重82。"},
+    {"role": "assistant", "content": "收到。"}
+  ],
+  "expected_facts": 2
+}
