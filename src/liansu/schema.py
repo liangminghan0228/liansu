@@ -47,8 +47,9 @@ class Fact(BaseModel):
         return self
 
     def is_valid_at(self, when: date | None = None) -> bool:
+        """左闭右开 [valid_from, valid_to)：supersede 当天旧事实即失效。"""
         when = when or date.today()
-        return self.valid_from <= when and (self.valid_to is None or self.valid_to >= when)
+        return self.valid_from <= when and (self.valid_to is None or when < self.valid_to)
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

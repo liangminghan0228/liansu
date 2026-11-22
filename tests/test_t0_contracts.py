@@ -28,8 +28,9 @@ def test_fact_valid_window():
     f = Fact.from_yaml((FIXTURES / "fact.yaml").read_text(encoding="utf-8"))
     assert f.is_valid_at(f.valid_from) is True
     f2 = f.model_copy(update={"valid_to": f.valid_from})
-    assert f2.is_valid_at(f.valid_from) is True
+    assert f2.is_valid_at(f.valid_from) is False  # 左闭右开：valid_to 当天即失效
     from datetime import timedelta
+    assert f2.is_valid_at(f.valid_from - timedelta(days=1)) is False
     assert f2.is_valid_at(f.valid_from + timedelta(days=1)) is False
 
 
