@@ -230,8 +230,10 @@ def test_cli_capture_source_and_out(tmp_path):
     assert json.loads(out.read_text(encoding="utf-8"))["ok"] is True
 
 
-def test_cli_placeholders(capsys):
-    assert main(["record"]) == 0
-    assert main(["recall"]) == 0
-    assert main(["rebuild"]) == 0
-    assert "not implemented" in capsys.readouterr().out
+def test_cli_subcommands_wired():
+    """T16 后 record/recall/expand/brief/rebuild 已接真实实现，不再是占位符。"""
+    from liansu.cli import _build_parser
+
+    for name in ("capture", "record", "recall", "expand", "brief", "rebuild"):
+        assert name in _build_parser()._subparsers._group_actions[0].choices
+    assert main([]) == 0  # 无子命令时打印帮助

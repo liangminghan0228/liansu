@@ -135,7 +135,9 @@ flowchart TB
   supersedes: F-20261001-007                  # 覆盖旧事实（旧的是"北京/西安未定"）
 ```
 
-**supersede 语义**：不删旧行，只把旧 fact 的 `valid_to` 置为当前时间，并让新 fact 的 `supersedes` 指向它。这是时效性与「现在是否成立」的实现基础。
+**supersede 语义（落地修订）**：不删旧行，也**不原地改旧行的 `valid_to`**。改为追加一条 `supersede` 事件（记录 `old_id` + `new_id` + `at`），读时重放事件流计算失效状态。这是时效性与「现在是否成立」的实现基础。
+
+> 修订理由：原地改旧行会破坏 append-only 铁律，且并发/多设备下易冲突。事件流方案让真源保持纯追加，同时时效仍可表达，每次记忆变更都能 `git diff` 审计。实现见 `src/liansu/vault/journal.py`。
 
 ---
 
@@ -272,6 +274,8 @@ flowchart LR
 
 **推荐 A，但分阶段**：W1-2 先用 C 跑通基线（呼应「先 embedding 建边，别上来全量 LLM」的教训），W7-8 再引入 Graphiti。这样能量化图到底带来多少增益。
 
+> **落地修订（2026-11-22）**：Graphiti 依赖 neo4j，本地无该服务。实际采用**方案 B（networkx 自建双时态图）**，接口严格遵循 `Index` ABC（`add/search/rebuild/close` + `neighbors`），后续若要换 Graphiti 只需替换 `index/graph.py` 实现，上层 fuse/expand/mcp 零改动。这正好验证了「接口先行、实现可换」的设计。
+
 ### 5.7 召回融合策略
 
 | 方案 | 优点 | 缺点 | 适用 |
@@ -403,3 +407,17 @@ rebuild() -> status
 - **hook 全自，brief 可选** —— 写入全自动，读取按需查；
 - **便宜门控，贵在刀刃** —— gate 用便宜模型，judge 才考虑 API；
 - **事实保鲜，只增不改** —— 时效靠 valid_to，并发靠 append-only。
+
+---
+
+## 10. 落地状态（2026-11-22）
+
+17 个任务 / 5 个波次全部完成，129 个测试通过。与方案的两处偏差已在正文标注修订：
+
+| 项 | 方案原述 | 落地实现 | 原因 |
+|---|---|---|---|
+| supersede | 原地改旧行 `valid_to` | 追加 `supersede` 事件流，重放计算 | 保住 append-only |
+| 双时态图 | Graphiti | networkx 自建（同 `Index` 契约） | neo4j 不可用，接口可换 |
+| 向量库 | sqlite-vec | sqlite-vec + 纯 Python cosine 兜底 | 扩展不可用时仍能跑 |
+
+已验证链路：`record → gate → extract → confidence → supersede → append → 索引增量`（写）与 `recall（BM25+向量 RRF → 时效过滤）→ expand（多跳）`（读）。宿主接线见 `docs/integration.md`，hook 实测结论见 `docs/hook-probe.md`。

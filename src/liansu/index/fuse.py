@@ -53,7 +53,8 @@ class FuseIndex:
             return []
         try:
             return idx.search(query, top_k=pool)
-        except NotImplementedError:
+        except Exception:
+            # 单路失败（如向量模型未就绪）不应拖垮整体，跳过该路继续融合
             return []
 
     def recall(

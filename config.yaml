@@ -4,6 +4,8 @@ llm:
   base_url: http://192.168.0.100:8080/v1   # IP 会变，接入前 curl /health 确认
   api_key: dummy                            # 本地服务不校验
   model: local                              # 服务端忽略 model 匹配，惯例填 local
+  timeout: 60                               # 14B 生成慢，给足超时
+  trust_env: false                          # 局域网端点禁用系统代理（否则 HTTP_PROXY 会把内网请求发进代理→502）
   extra_body:
     chat_template_kwargs:
       enable_thinking: false                # Qwen3 必加，否则 JSON 外混入思考文本

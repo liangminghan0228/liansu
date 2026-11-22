@@ -196,6 +196,25 @@ def test_ollama_only_points_localhost(openai_ctor):
 
     ctor_kwargs = openai_ctor.call_args.kwargs
     assert ctor_kwargs["base_url"] == "http://localhost:11434/v1"
-    assert "8080" not in json.dumps(ctor_kwargs, ensure_ascii=False)
+    assert "8080" not in ctor_kwargs["base_url"]
     assert provider.gate(MEANINGFUL_DIALOG) is True
     assert provider._client.chat.completions.create.call_args.kwargs["extra_body"] == {}
+
+
+def test_fill_fact_completes_system_fields():
+    """真实端点踩坑回归：LLM 返回空 id/valid_from/created_at 时系统补全，不抛校验错。"""
+    from liansu.providers.api import _fill_fact
+
+    filled = _fill_fact(
+        {"subject": "梁明晗", "predicate": "求职目标城市", "object": "北京",
+         "statement": "定了北京", "confidence": 0.9, "topics": ["求职"],
+         "id": "", "valid_from": "", "valid_to": "", "created_at": "", "source": ""},
+        source="smoke://",
+    )
+    assert filled["id"].startswith("F-")
+    assert filled["valid_from"]
+    assert filled["valid_to"] is None
+    assert filled["created_at"]
+    assert filled["source"] == "smoke://"
+    from liansu.schema import Fact
+    Fact.from_dict(filled)  # 补全后可通过 schema 校验

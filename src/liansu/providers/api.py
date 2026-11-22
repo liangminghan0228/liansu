@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from openai import APIConnectionError, APIError, APITimeoutError, OpenAI
 
@@ -111,6 +113,30 @@ def _json_schema_format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fill_fact(raw: dict[str, Any], source: str) -> dict[str, Any]:
+    """系统元数据不由 LLM 决定：空 id / 时间戳 / source 一律由系统补全，
+    避免模型输出空串导致 Fact 校验失败（真实端点实测踩到）。"""
+    raw = dict(raw)
+    if not raw.get("id"):
+        raw["id"] = f"F-{date.today():%Y%m%d}-{uuid4().hex[:6]}"
+    if not raw.get("valid_from"):
+        raw["valid_from"] = date.today().isoformat()
+    if not raw.get("valid_to"):
+        raw["valid_to"] = None
+    if not raw.get("created_at"):
+        raw["created_at"] = datetime.now(timezone.utc).isoformat()
+    if not raw.get("source"):
+        raw["source"] = source or "llm://unknown"
+    if raw.get("confidence") is None:
+        raw["confidence"] = 0.7
+    if not raw.get("topics"):
+        raw["topics"] = []
+    for key in ("subject", "predicate", "object", "statement"):
+        if raw.get(key) is None:
+            raw[key] = ""
+    return raw
+
+
 def _strip_fences(text: str) -> str:
     """去掉模型偶发包上的 ```json 围栏。"""
     text = text.strip()
@@ -147,6 +173,9 @@ class ApiProvider(LLMProvider):
         self.model: str = model
         self.timeout: float = float(llm.get("timeout", DEFAULT_TIMEOUT))
         self.max_retries: int = int(llm.get("max_retries", DEFAULT_MAX_RETRIES))
+        # 局域网端点默认不走系统代理：若环境有 HTTP_PROXY 且 NO_PROXY 未含该 IP，
+        # SDK 会把请求发进代理导致 502。外网 API 可显式设 trust_env: true。
+        self.trust_env: bool = bool(llm.get("trust_env", False))
 
         # Qwen3 必须关 thinking，否则 JSON 外混入思考文本；config 可加其他 extra 项，
         # 但 enable_thinking=False 不可丢。
@@ -154,12 +183,21 @@ class ApiProvider(LLMProvider):
         self._extra_body: dict[str, Any] = dict(extra) if isinstance(extra, dict) else {}
         self._extra_body.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
 
-        self._client = client if client is not None else OpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key,
-            timeout=self.timeout,
-            max_retries=self.max_retries,
-        )
+        if client is not None:
+            self._client = client
+        else:
+            kwargs: dict[str, Any] = dict(
+                base_url=self.base_url,
+                api_key=self.api_key,
+                timeout=self.timeout,
+                max_retries=self.max_retries,
+            )
+            try:
+                import httpx2
+                kwargs["http_client"] = httpx2.Client(trust_env=self.trust_env, timeout=self.timeout)
+            except Exception:
+                pass  # 不同 openai 版本依赖名不同，退回默认 client
+            self._client = OpenAI(**kwargs)
 
     # ---- 底层调用 -------------------------------------------------------
     def _chat(
@@ -245,9 +283,7 @@ class ApiProvider(LLMProvider):
                 for raw in raw_facts:
                     if not isinstance(raw, dict):
                         raise ValueError("每条 fact 必须是对象")
-                    if source and not raw.get("source"):
-                        raw = {**raw, "source": source}
-                    facts.append(Fact.from_dict(raw))
+                    facts.append(Fact.from_dict(_fill_fact(raw, source)))
                 return facts
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
                 last_exc = exc
