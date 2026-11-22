@@ -96,8 +96,11 @@ def test_extract_success_with_full_fact_schema(openai_ctor):
 
     assert len(facts) == 1
     assert isinstance(facts[0], Fact)
-    assert facts[0].id == "F-20261121-001"
+    # 契约：id 由系统生成，不采信模型自造（实测模型会给跨批重复的 fact_001）
+    assert facts[0].id.startswith("F-") and facts[0].id != FACT_DICT["id"]
     assert facts[0].subject == "梁明晗"
+    # 契约：source 由系统覆盖，模型无权决定来源
+    assert facts[0].source == "codex://rollout-x"
 
     kwargs = provider._client.chat.completions.create.call_args.kwargs
     fmt = kwargs["response_format"]
@@ -113,19 +116,26 @@ def test_extract_retries_once_after_parse_failure(openai_ctor):
     facts = ApiProvider(CFG).extract(MEANINGFUL_DIALOG)
 
     assert client.chat.completions.create.call_count == 2
-    assert len(facts) == 1 and facts[0].id == "F-20261121-001"
+    assert len(facts) == 1 and facts[0].id.startswith("F-")
 
 
-def test_extract_retries_once_after_schema_validation_failure(openai_ctor):
-    bad = {**FACT_DICT, "confidence": 1.5}  # 违反 Fact 约束
+def test_extract_retries_once_after_malformed_payload(openai_ctor):
+    """结构不合法（缺 facts 数组）才重试；字段级瑕疵由 _fill_fact 兜底不重试。"""
     client = _client(
-        json.dumps({"facts": [bad]}, ensure_ascii=False),
+        json.dumps({"wrong_key": []}, ensure_ascii=False),
         json.dumps({"facts": [FACT_DICT]}, ensure_ascii=False),
     )
     openai_ctor.return_value = client
     facts = ApiProvider(CFG).extract(MEANINGFUL_DIALOG)
     assert client.chat.completions.create.call_count == 2
-    assert facts[0].confidence == 0.92
+    assert len(facts) == 1
+
+
+def test_extract_clamps_out_of_range_confidence(openai_ctor):
+    """confidence=1.5 这类越界值是常见模型输出，钳制处理，不整批失败。"""
+    openai_ctor.return_value = _client(json.dumps({"facts": [{**FACT_DICT, "confidence": 1.5}]}, ensure_ascii=False))
+    facts = ApiProvider(CFG).extract(MEANINGFUL_DIALOG)
+    assert len(facts) == 1 and facts[0].confidence == 1.0
 
 
 def test_extract_retry_exhausted_raises(openai_ctor):
@@ -218,3 +228,59 @@ def test_fill_fact_completes_system_fields():
     assert filled["source"] == "smoke://"
     from liansu.schema import Fact
     Fact.from_dict(filled)  # 补全后可通过 schema 校验
+
+
+# ---- _fill_fact：端到端真实链路踩坑的系统侧防御 -------------------------
+def test_fill_fact_rejects_hallucinated_dates():
+    """模型给无时间信息对话编造 2023-10-01 / valid_to 2025-12-31 → 一律纠正。"""
+    from datetime import date
+    from liansu.providers.api import _fill_fact
+
+    filled = _fill_fact(
+        {"subject": "用户", "predicate": "目标城市", "object": "北京",
+         "statement": "目标城市在北京和西安之间还没定", "confidence": 0.8,
+         "valid_from": "2023-10-01", "valid_to": "2025-12-31"},
+        source="e2e://",
+    )
+    assert filled["valid_from"] == date.today().isoformat()   # 文本无该年份 → 不采信
+    assert filled["valid_to"] is None                          # 新陈述默认当前有效
+
+
+def test_fill_fact_keeps_date_mentioned_in_text():
+    """文本确实写了年份时，valid_from 应保留（如「2024年7月入职」）。"""
+    from liansu.providers.api import _fill_fact
+
+    filled = _fill_fact(
+        {"subject": "梁明晗", "predicate": "工作单位", "object": "理想汽车",
+         "statement": "2024年7月入职理想汽车", "confidence": 1.0,
+         "valid_from": "2024-07-01"},
+        source="e2e://",
+    )
+    assert filled["valid_from"] == "2024-07-01"
+
+
+def test_fill_fact_cleans_null_strings():
+    """模型有时把 None 写成字符串 'null'，必须清洗，否则 Date 校验直接失败。"""
+    from liansu.schema import Fact
+    from liansu.providers.api import _fill_fact
+
+    filled = _fill_fact(
+        {"subject": "梁明晗", "predicate": "身高", "object": "188cm",
+         "statement": "身高188", "confidence": 0.9,
+         "valid_to": "null", "supersedes": "None", "valid_from": "null"},
+        source="e2e://",
+    )
+    assert filled["valid_to"] is None
+    assert filled["supersedes"] is None
+    Fact.from_dict(filled)  # 校验通过
+
+
+def test_fill_fact_ids_are_unique_across_calls():
+    """模型自造 id 会跨批重复（fact_001 撞 fact_001），系统必须强制换新。"""
+    from liansu.providers.api import _fill_fact
+
+    base = {"id": "fact_001", "subject": "梁明晗", "predicate": "身高",
+            "object": "188cm", "statement": "身高188", "confidence": 0.9}
+    a = _fill_fact(base, source="e2e://")["id"]
+    b = _fill_fact(base, source="e2e://")["id"]
+    assert a != b and a != "fact_001" and b != "fact_001"

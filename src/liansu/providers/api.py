@@ -113,27 +113,88 @@ def _json_schema_format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_NULLISH = {"", "null", "none", "nil", "n/a", "na", "undefined", "-"}
+
+
+def _clean_scalar(value: Any) -> Any:
+    """把模型爱吐的 'null'/'None'/'' 等字符串统一成 None。"""
+    if isinstance(value, str) and value.strip().lower() in _NULLISH:
+        return None
+    return value
+
+
+def _coerce_date(value: Any) -> date | None:
+    """尽力把模型给的日期解析成 date；解析不出返回 None。"""
+    value = _clean_scalar(value)
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if len(text) >= 10:
+        text = text[:10]
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _trusted_valid_from(raw_from: Any, statement: str) -> str:
+    """valid_from 只在「文本里真提到过这个年份」时才采信模型的值。
+
+    实测模型会给无时间信息的对话编造 '2023-10-01' / '2025-12-31'，导致刚写入
+    就显示过期。凡文本未提及的年份一律视为幻觉，回退到当天。
+    """
+    parsed = _coerce_date(raw_from)
+    today = date.today()
+    if parsed is None or parsed > today:
+        return today.isoformat()
+    if str(parsed.year) not in (statement or ""):
+        return today.isoformat()
+    return parsed.isoformat()
+
+
 def _fill_fact(raw: dict[str, Any], source: str) -> dict[str, Any]:
-    """系统元数据不由 LLM 决定：空 id / 时间戳 / source 一律由系统补全，
-    避免模型输出空串导致 Fact 校验失败（真实端点实测踩到）。"""
+    """系统元数据不由 LLM 决定，一律由系统补全或覆盖。
+
+    真实端点端到端实测踩到的坑（mock 永远测不出）：
+      1. id 交模型自造会跨批重复（fact_001 撞 fact_001），主键冲突丢数据；
+      2. valid_from/valid_to 是幻觉，新事实一写入就「已过期」；
+      3. valid_to 可能是字符串 'null'，Date 校验直接失败；
+      4. source 被模型覆盖成「用户对话」，丢掉调用方的真实来源。
+    """
     raw = dict(raw)
-    if not raw.get("id"):
-        raw["id"] = f"F-{date.today():%Y%m%d}-{uuid4().hex[:6]}"
-    if not raw.get("valid_from"):
-        raw["valid_from"] = date.today().isoformat()
-    if not raw.get("valid_to"):
-        raw["valid_to"] = None
-    if not raw.get("created_at"):
-        raw["created_at"] = datetime.now(timezone.utc).isoformat()
-    if not raw.get("source"):
-        raw["source"] = source or "llm://unknown"
-    if raw.get("confidence") is None:
-        raw["confidence"] = 0.7
-    if not raw.get("topics"):
-        raw["topics"] = []
+    statement = str(raw.get("statement") or "")
+
+    # 1) 主键与来源：无条件系统生成，绝不采信模型
+    raw["id"] = f"F-{date.today():%Y%m%d}-{uuid4().hex[:8]}"
+    raw["source"] = source or raw.get("source") or "llm://unknown"
+    raw["created_at"] = datetime.now(timezone.utc).isoformat()
+
+    # 2) 时间：valid_from 需文本佐证；valid_to 一律清空（新陈述默认当前有效）
+    raw["valid_from"] = _trusted_valid_from(raw.get("valid_from"), statement)
+    raw["valid_to"] = None
+
+    # 3) 数值与集合
+    conf = raw.get("confidence")
+    try:
+        conf = float(conf) if conf is not None else 0.7
+    except (TypeError, ValueError):
+        conf = 0.7
+    raw["confidence"] = min(1.0, max(0.0, conf))
+
+    topics = raw.get("topics")
+    if isinstance(topics, str):
+        topics = [topics] if topics.strip() else []
+    raw["topics"] = [str(t) for t in (topics or []) if str(t).strip()]
+
+    # 4) 字符串字段兜底，避免 None / 'None' 打穿校验
     for key in ("subject", "predicate", "object", "statement"):
         if raw.get(key) is None:
             raw[key] = ""
+    raw["supersedes"] = _clean_scalar(raw.get("supersedes"))
     return raw
 
 
@@ -264,9 +325,23 @@ class ApiProvider(LLMProvider):
             {
                 "role": "system",
                 "content": (
-                    "你是连溯的结构化事实抽取器。从对话中抽取值得长期记忆的事实，"
-                    "每条严格按给定 schema 填写所有字段；无对应值时用 null 或空字符串。"
-                    "statement 保留原始自然语言。只输出 JSON。"
+                    "你是连溯的结构化事实抽取器。从对话中抽取值得长期记忆的事实，只输出 JSON。\n"
+                    "字段规范（必须严格遵守，否则下游的时效替换会失效）：\n"
+                    "1. subject：事实主体，必须是稳定实体名。指用户本人时一律写「用户」"
+                    "（不要写「我」「本人」或具体姓名）；禁止把属性名/话题当 subject（错误：「目标城市」「职业规划」）。\n"
+                    "2. predicate：稳定属性名，2~6 字的名词或动宾短语（如「求职目标城市」「毕业院校」「身高」）。"
+                    "禁止把句子片段当 predicate（错误：「在...之间还没定下来」「确定为」「准备转」）。"
+                    "同一 subject 的同一属性，前后必须用完全相同的写法。\n"
+                    "3. object：属性取值，尽量简短（「北京」而非「北京和西安之间还没定下来」）。\n"
+                    "4. statement：保留原始自然语言，可引用原句。\n"
+                    "5. confidence：0~1。用户明确陈述 ≥0.9；推理猜测 ≤0.6。\n"
+                    "6. topics：1~3 个主题标签。\n"
+                    "7. id / valid_from / valid_to / created_at / source 由系统填写，一律给 null。\n"
+                    "示例输入「我想好了，目标城市就定北京，西安不考虑了」→\n"
+                    '{"facts":[{"subject":"用户","predicate":"求职目标城市","object":"北京",'
+                    '"statement":"目标城市就定北京，西安不考虑了","confidence":0.95,'
+                    '"topics":["求职"],"id":null,"valid_from":null,"valid_to":null,'
+                    '"created_at":null,"source":null,"supersedes":null}]}'
                 ),
             },
             {"role": "user", "content": self._dialog_payload(dialog)},

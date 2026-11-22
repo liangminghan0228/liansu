@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 from liansu.index.base import Index
@@ -18,7 +19,11 @@ class VectorIndex(Index):
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.embedder = embedder
         self.table = table
-        self._conn = sqlite3.connect(str(self.db_path))
+        # MCP 工具在事件循环的线程池里执行，与构造线程不同。
+        # sqlite3 默认 check_same_thread=True 会直接抛错（端到端实测踩到），
+        # 故关闭该限制并用锁保证跨线程访问安全。
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._setup()
 
     def _setup(self) -> None:
@@ -36,34 +41,42 @@ class VectorIndex(Index):
 
     def add(self, facts: list[Fact]) -> None:
         dim = self.embedder.dimension()
+        # embed 计算耗时，放在锁外，避免长时间占用连接
+        rows: list[tuple[str, bytes]] = []
         for f in facts:
             vec = self.embedder.embed(f.statement_for_index())
             if len(vec) != dim:
                 raise ValueError(f"embed 维度不一致: {len(vec)} != {dim}")
-            blob = sqlite3.Binary(_pack(vec))
-            self._conn.execute(
-                f"INSERT OR REPLACE INTO {self.table}(fact_id, embedding) VALUES (?, ?)",
-                (f.id, blob),
-            )
-        self._conn.commit()
+            rows.append((f.id, _pack(vec)))
+        with self._lock:
+            for fid, blob in rows:
+                self._conn.execute(
+                    f"INSERT OR REPLACE INTO {self.table}(fact_id, embedding) VALUES (?, ?)",
+                    (fid, sqlite3.Binary(blob)),
+                )
+            self._conn.commit()
 
     def search(self, query: str, top_k: int = 5) -> list[tuple[str, float]]:
         qvec = self.embedder.embed(query)
-        rows = self._conn.execute(f"SELECT fact_id, embedding FROM {self.table}").fetchall()
+        with self._lock:
+            rows = self._conn.execute(f"SELECT fact_id, embedding FROM {self.table}").fetchall()
         scored = [(fid, _cosine(qvec, _unpack(blob))) for fid, blob in rows]
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:top_k]
 
     def rebuild(self, facts: list[Fact]) -> None:
-        self._conn.execute(f"DELETE FROM {self.table}")
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(f"DELETE FROM {self.table}")
+            self._conn.commit()
         self.add(facts)
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def count(self) -> int:
-        return self._conn.execute(f"SELECT COUNT(*) FROM {self.table}").fetchone()[0]
+        with self._lock:
+            return self._conn.execute(f"SELECT COUNT(*) FROM {self.table}").fetchone()[0]
 
 
 # float32 打包/解包（sqlite-vec 与 Python fallback 共用），用标准库避免 numpy 硬依赖

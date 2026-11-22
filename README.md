@@ -6,7 +6,7 @@
 
 ## 状态
 
-17 个开发任务全部落地，**129 个测试通过**，5 个 MCP 工具可用，`record → recall → expand` 全链路跑通。
+17 个开发任务全部落地，**135 个单测 + 25 项端到端断言全部通过**，5 个 MCP 工具可用，`record → recall → expand` 全链路在真实 LLM 上跑通。
 
 ## 核心设计
 
@@ -109,11 +109,14 @@ evalset/               自建 gold.jsonl（24 题，含时效样本）
 ## 评测
 
 ```bash
-.venv/bin/python -m pytest tests/ -q        # 全部单测
+.venv/bin/python -m pytest tests/ -q        # 135 个单测（全 mock，约 1s）
+.venv/bin/python scripts/e2e_real.py        # 端到端真实链路（真实 LLM + bge，约 30s）
 .venv/bin/python -m eval.runner --gold evalset/own/gold.jsonl --stages 0 1 2 3
 ```
 
 分阶段消融：Stage0 仅 BM25 → +向量 → +图 → +时效，逐级记录 HitRate/Recall/MRR/时效正确率。数字待真实 vault + bge 模型到位后填入 `docs/EVAL_REPORT.md`。
+
+端到端测试走 `build_context()` 生产装配，从 MCP 协议层进入，覆盖 record → 真源 → 三路索引 → 消融检索 → expand → 视图 → rebuild → 幂等 → stdio 子进程共 25 项断言。首轮跑通即发现并修复 5 个 mock 测不出的缺陷（fact id 跨批重复、模型编造日期、`"null"` 字符串、SQLite 跨线程、source 被覆盖），详见 `docs/E2E_REPORT.md`。
 
 ## 已知限制
 
