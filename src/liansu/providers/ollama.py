@@ -1,6 +1,6 @@
 """可选离线兜底 provider — 本机 Ollama（localhost:11434）。
 
-注意：Windows 主机 192.168.0.100:8080 是 llama.cpp 的 OpenAI-compatible 服务，
+注意：Windows 主机 192.168.0.101:8080（2026-11-23 实测，此前为 .100）是 llama.cpp 的 OpenAI-compatible 服务，
 **不是 Ollama 协议**——其 /api/chat 与 /api/generate 均返回 404，禁止把 Ollama
 client 的 base_url 指到 8080，也禁止把 ApiProvider 指到 11434 之外混用两者。
 本 provider 仅复用 Ollama 自带的 OpenAI-compatible /v1 端点，不引入 ollama 包依赖。

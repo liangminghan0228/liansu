@@ -9,7 +9,7 @@
 退出码 0 = 全部断言通过，1 = 有失败。
 
 依赖外部条件（脚本会先自检，不满足直接报错退出，不静默跳过）：
-  - LLM 服务 http://192.168.0.100:8080/health 可达
+  - LLM 服务 http://192.168.0.101:8080/health 可达（2026-11-23 实测：.100 已失效，实际为 .101）
   - bge-small-zh-v1.5 模型可加载
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ from fastmcp import Client  # noqa: E402
 import liansu.mcp_server as ms  # noqa: E402
 from liansu.config import load_config  # noqa: E402
 
-LLM_HEALTH = "http://192.168.0.100:8080/health"
+LLM_HEALTH = "http://192.168.0.101:8080/health"
 
 # ---- 测试对话：三段，第三段与第二段给同一属性不同取值，用于验证 supersede ----
 DIALOGS = [

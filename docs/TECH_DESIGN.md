@@ -215,7 +215,7 @@ flowchart LR
 
 | 项 | 值 | 备注 |
 |---|---|---|
-| 主机 | `192.168.0.100` | **IP 会变**（曾 `.103`→`.100`），每次接入前先 `curl /health` 确认 |
+| 主机 | `192.168.0.101` | **IP 会变**（曾 `.103`→`.100`→`.101`，2026-11-23 实测）。找不到时用 DeskFlow 的客户端连接反查：`lsof -nP -iTCP:24800 \| grep ESTABLISHED \| head -1` 看对端 IP；每次接入前 `curl /health` 确认 |
 | 推理服务 | llama.cpp `llama-server`，端口 **8080** | OpenAI Chat Completions 协议 |
 | base_url | `http://192.168.0.100:8080/v1` | 带 `/v1`，SDK 会拼 `/chat/completions` |
 | api_key | `dummy` | 本地服务不校验，随意填 |

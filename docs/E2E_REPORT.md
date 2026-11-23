@@ -3,7 +3,7 @@
 > 执行时间：2026-11-22 11:22 GMT+8
 > 执行方式：`.venv/bin/python scripts/e2e_real.py`
 > 结果：**25/25 断言通过，耗时 31.1s**
-> 环境：macOS + Python 3.13；LLM `http://192.168.0.100:8080/v1`（真实 Qwen3）；embedder `BAAI/bge-small-zh-v1.5`（512 维）
+> 环境：macOS + Python 3.13；LLM `http://192.168.0.101:8080/v1`（真实 Qwen3-14B，2026-11-23 实测；此前为 `.100`，DHCP 漂移后失效）；embedder `BAAI/bge-small-zh-v1.5`（512 维）
 
 ## 1. 测的是什么
 
@@ -96,7 +96,7 @@ prompt 增加了硬约束：subject 指本人统一写「用户」、predicate �
 cd /Users/liangminghan/work/code/liansu
 
 # 前置条件自检（脚本会自动做，不满足直接退出，不静默跳过）
-curl -s -m 4 -o /dev/null -w "%{http_code}\n" http://192.168.0.100:8080/health
+curl -s --noproxy '*' -m 4 -o /dev/null -w "%{http_code}\n" http://192.168.0.101:8080/health
 
 # 跑端到端（真实 LLM + 真实向量模型）
 .venv/bin/python scripts/e2e_real.py
