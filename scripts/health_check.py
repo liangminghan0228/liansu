@@ -45,6 +45,38 @@ def check_llm(cfg: dict) -> bool:
         return False
 
 
+def check_host_wiring() -> bool:
+    """检查宿主配置 + 信任审批，返回是否已写入信任。"""
+    print("\n[5] 宿主接线（配置 + 信任审批）")
+    wb = Path.home() / ".workbuddy"
+    mcp_json = wb / "mcp.json"
+    approved = False
+    if mcp_json.exists():
+        entry = (json.loads(mcp_json.read_text(encoding="utf-8")).get("mcpServers") or {}).get("liansu")
+        if entry:
+            state = "已配置（disabled=true）" if entry.get("disabled") else "已配置（enabled）"
+            _line(OK if not entry.get("disabled") else WARN, f"~/.workbuddy/mcp.json {state}")
+        else:
+            _line(BAD, "~/.workbuddy/mcp.json 无 liansu 条目")
+    else:
+        _line(BAD, "未找到 ~/.workbuddy/mcp.json")
+
+    approvals = wb / "mcp-approvals.json"
+    if approvals.exists():
+        keys = json.loads(approvals.read_text(encoding="utf-8"))
+        hits = [k for k in keys if k.endswith("::liansu")]
+        approved = bool(hits)
+        _line(OK if approved else BAD,
+              f"信任审批 {'已写入' if approved else '缺失'}（{len(hits)} 条 liansu 记录）")
+        if not approved:
+            _line(WARN, "处置：连接器页对 liansu 点「信任」，或重跑授权流程")
+    else:
+        _line(BAD, "未找到 mcp-approvals.json（尚无信任记录）")
+    _line(WARN if approved else BAD,
+          "审批已写入 ≠ 当前会话已加载：必须完全退出并重启 WorkBuddy 后，工具才会出现")
+    return approved
+
+
 def main() -> int:
     cfg = load_config()
     journal_dir = ROOT / (cfg.get("vault") or {}).get("journal_dir", "journal")
@@ -59,6 +91,7 @@ def main() -> int:
     if not journal_dir.exists():
         _line(BAD, f"{journal_dir} 不存在 —— 从未写入过任何记忆")
         _line(WARN, "处置：让宿主动 record，或跑 scripts/e2e_real.py 验证链路")
+        check_host_wiring()
         print("\n结论：数据层为空，recall 必然返回空。先灌数据再验证记忆效果。")
         return 1
 
@@ -96,18 +129,7 @@ def main() -> int:
     else:
         _line(WARN, "vault_views 未生成（首次 record 或 rebuild 后自动出现，不影响检索）")
 
-    print("\n[5] 宿主接线")
-    mcp_json = Path.home() / ".workbuddy" / "mcp.json"
-    if mcp_json.exists():
-        entry = (json.loads(mcp_json.read_text(encoding="utf-8")).get("mcpServers") or {}).get("liansu")
-        if entry:
-            state = "已配置（disabled=true）" if entry.get("disabled") else "已配置（enabled）"
-            _line(OK if not entry.get("disabled") else WARN, f"~/.workbuddy/mcp.json {state}")
-            _line(WARN, "配置存在 ≠ 工具已加载：需在连接器页点「信任」并重启 WorkBuddy")
-        else:
-            _line(BAD, "~/.workbuddy/mcp.json 无 liansu 条目")
-    else:
-        _line(BAD, "未找到 ~/.workbuddy/mcp.json")
+    check_host_wiring()
 
     print("\n" + "=" * 62)
     print(f"结论：数据层健康，{len(valid)} 条有效记忆可召回。")
