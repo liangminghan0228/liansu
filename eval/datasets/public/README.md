@@ -7,9 +7,10 @@
 ## 为什么公开集要单独一层
 
 `eval.runner` 的前提是「fact 已在 vault 里」。公开集的事实只存在于数据集本身，
-不先落进 journal 就没有东西可召回。所以 `eval.public_runner` 每题建一个临时
-journal（`--isolate case` 默认），灌 `gold_facts` + `stale_facts`，跑完即删，
-不碰用户真实 vault。
+不先落进 journal 就没有东西可召回。所以 `eval.public_runner` 按隔离粒度建临时
+journal（`--isolate auto|case|sample|file`），灌 `gold_facts` + `stale_facts`，跑完即删，
+不碰用户真实 vault。默认 `auto`：有 `<dataset>.haystack.jsonl` 的数据集按整场会话隔离，
+否则逐题隔离。
 
 ## 三步跑通
 
@@ -76,8 +77,9 @@ Stage1 +向量 → Stage2 +图 → Stage3 +时效 的 HitRate / Recall@k / MRR /
 
 - 仓库当前**没有 embedder**（bge-small-zh 未接入），Stage1 与 Stage0 等价；
   BM25 + jieba 是纯词面召回，在英文公开集上会系统性偏低 —— 这是仓库现状，不是方法结论；
-- 逐题隔离（`case`）是公开集的默认口径；`--isolate file` 会把整个数据集灌进一个索引，
-  更接近真实长期积累，但跨题事实会互相挤占 top-k，只作对照。
+- 默认 `auto`：有 haystack 时按场次（`sample`）检索，否则逐题（`case`）；`--isolate sample`
+  在同场全部轮次里检索，`--isolate file` 把整个数据集灌进一个索引，更接近真实长期积累，
+  但跨题事实会互相挤占 top-k，只作对照。
 
 ## 自检
 

@@ -8,7 +8,7 @@
 
 - `eval/e2e_runner.py`：从原始对话出发的端到端评测链路（gate → 抽取 → confidence → supersede → 落盘 → 召回），含 `stub` / `real` 两种 provider 与 5 条标注用例（见 `docs/e2e-eval.md`）。
 - `eval/datasets/public/convert.py`：LongMemEval / LoCoMo / HotpotQA / FreshQA 四个公开数据集 → 统一 gold JSONL，含证据映射（证据会话、dia_id、支撑句）、知识更新旧值启发式、对抗样本与时效口径标注、坏数据校验与 `--check-only`。
-- `eval/public_runner.py`：公开集评测，把 gold/stale 事实灌进逐题隔离的临时 journal（`--isolate case|file`）后复用 `eval.runner` 的 Stage 消融与渲染；新增 `stale_facts` / `expect` / `scope` / `meta` 兼容字段，FreshQA 等无证据数据集只进时效指标。
+- `eval/public_runner.py`：公开集评测，把 gold/stale 事实灌进隔离的临时 journal（`--isolate auto|case|sample|file`）后复用 `eval.runner` 的 Stage 消融与渲染；新增 `stale_facts` / `expect` / `scope` / `meta` 兼容字段，FreshQA 等无证据数据集只进时效指标。
 - `eval/datasets/public/fixtures/`：四份按真实字段手写的小样本，不联网即可验证转换与评测链路。
 - `liansu metrics`：遥测聚合命令，输出会话、事实、索引与视图体量，供宿主插件消费。
 - `liansu health` / `liansu endpoint`：服务可用性自检与 Deskflow 动态端点解析结果查看，支持 `--json` 与 CI 退出码。
@@ -20,6 +20,7 @@
 - 请求禁用系统代理（`trust_env: false`），避免局域网端点被 `HTTP_PROXY` 转发导致 502。
 - 按开源仓库规范整理目录：`demo.py` 移入 `examples/`，评测集归入 `eval/datasets/`；新增 `CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、GitHub Issue/PR 模板与 CI。
 - 本地 `config.yaml` 不再入库，改由 `config.example.yaml` 提供脱敏示例；缺失本地配置时自动回退到示例配置。
+- 公开集评测隔离策略升级：`--isolate auto|case|sample|file`；有 `<dataset>.haystack.jsonl` 的数据集（如 LoCoMo）默认按整场会话隔离，在同场全部轮次里检索，无 haystack 时退化为逐题隔离。
 
 ### Fixed
 

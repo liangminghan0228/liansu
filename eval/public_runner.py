@@ -47,22 +47,76 @@ DEFAULT_TOP_K = 5
 # ---------------------------------------------------------------- 灌库
 
 
+def _fact_rows(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """摊平 gold + stale fact（不改原记录）。"""
+    return [
+        f
+        for rec in records
+        for f in list(rec.get("gold_facts") or []) + list(rec.get("stale_facts") or [])
+    ]
+
+
+def _write_journal(facts: Iterable[dict[str, Any]], root: Path) -> int:
+    """把 fact 写进 ``root``，按 id 去重（gold 与 haystack 指向同一轮时只写一次）。"""
+    from liansu.schema import Fact
+    from liansu.vault.journal import Journal
+
+    journal = Journal(root)
+    seen: set[str] = set()
+    for fact in facts:
+        if fact["id"] in seen:
+            continue
+        seen.add(fact["id"])
+        journal.append(Fact.from_dict(fact))
+    return len(seen)
+
+
 def ingest(records: Iterable[dict[str, Any]], root: Path) -> int:
     """把 gold + stale fact 写进 ``root`` 下的临时 journal，返回写入条数。
 
     stale_facts 由转换器给出 ``valid_to``，直接以该状态落盘：重放时它天然过期，
     Stage3 的时效过滤会剔除它 —— 这正是「旧值不该被召回」的检验点。
     """
-    from liansu.schema import Fact
-    from liansu.vault.journal import Journal
+    return _write_journal(_fact_rows(records), root)
 
-    journal = Journal(root)
-    written = 0
+
+def load_haystack(path: Path) -> dict[str, list[dict[str, Any]]]:
+    """读 ``<dataset>.haystack.jsonl``：每行 ``{sample_id, facts}``。
+
+    有 haystack 的数据集（LoCoMo）每道题在整场会话里检索；gold 与 haystack
+    是同一批 fact（id 相同），所以召回命中就是真的找到了那几轮。
+    """
+    if not path.exists():
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        out[str(row["sample_id"])] = list(row.get("facts") or [])
+    return out
+
+
+def resolve_isolation(isolate: str, haystack: dict[str, list[dict[str, Any]]]) -> str:
+    """``auto`` 的语义：有 haystack 就按场次隔离，否则逐题隔离。"""
+    if isolate != "auto":
+        if isolate in ("sample", "file") and not haystack:
+            # 没有 haystack 时 sample 无意义，退化为 file（整场就是全部题干）
+            return "file"
+        return isolate
+    return "sample" if haystack else "case"
+
+
+def _groups(records: Sequence[dict[str, Any]], mode: str) -> list[list[dict[str, Any]]]:
+    """按隔离粒度分组：case=每题，sample=每场会话，file=全数据集。"""
+    if mode == "case":
+        return [[r] for r in records]
+    if mode == "file":
+        return [list(records)]
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for rec in records:
-        for fact in list(rec.get("gold_facts") or []) + list(rec.get("stale_facts") or []):
-            journal.append(Fact.from_dict(fact))
-            written += 1
-    return written
+        buckets[str((rec.get("meta") or {}).get("sample_id") or "_all")].append(rec)
+    return list(buckets.values())
 
 
 # ---------------------------------------------------------------- 聚合
@@ -134,22 +188,29 @@ def evaluate(
     records: Sequence[dict[str, Any]],
     stages: Sequence[int] = DEFAULT_STAGES,
     top_k: int = DEFAULT_TOP_K,
-    isolate: str = "case",
-) -> dict[int, dict[str, dict[str, Any]]]:
-    """跑一个公开集，返回 ``{stage: 指标}`` 的累加结果。
+    isolate: str = "auto",
+    haystack: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[int, dict[str, Any]]:
+    """跑一个公开集，返回 ``{stage: 累加器}``。
 
     不直接返回渲染后的表，是为了让调用方能把多个数据集合并成「公开集汇总」。
     """
-    if isolate not in ("case", "file"):
-        raise ValueError(f"isolate 只能是 case/file，收到 {isolate!r}")
+    haystack = haystack or {}
+    mode = resolve_isolation(isolate, haystack)
 
     acc: dict[int, dict[str, Any]] = defaultdict(_new_acc)
-    units = [[r] for r in records] if isolate == "case" else [list(records)]
-    for unit in units:
+    for group in _groups(records, mode):
+        facts = _fact_rows(group)
+        if mode == "sample":
+            for rec in group:
+                facts.extend(haystack.get(str((rec.get("meta") or {}).get("sample_id")), []))
+        elif mode == "file":
+            for sample_facts in haystack.values():
+                facts.extend(sample_facts)
         with tempfile.TemporaryDirectory(prefix="liansu-public-eval-") as tmp:
-            ingest(unit, Path(tmp))
+            _write_journal(facts, Path(tmp))
             fuse = build_fuse(tmp)
-            for record in unit:
+            for record in group:
                 per_stage = run_ablation(fuse, [record], stages=stages, top_k=top_k)
                 _accumulate(acc, record, per_stage)
     return {int(k): dict(v) for k, v in acc.items()}
@@ -194,7 +255,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--datasets", default=None, help="逗号分隔的数据集名，默认全部 *.gold.jsonl")
     parser.add_argument("--stages", default="0,1,2,3", help="逗号分隔的 Stage 列表")
     parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K, help="每 query 取前 k 条")
-    parser.add_argument("--isolate", default="case", choices=("case", "file"), help="隔离粒度")
+    parser.add_argument(
+        "--isolate", default="auto", choices=("auto", "case", "sample", "file"),
+        help="隔离粒度：auto=有 haystack 按场次，否则逐题；case=每题；sample=每场会话；file=整个数据集",
+    )
     parser.add_argument("--json", default=None, help="把指标另存为 JSON 文件")
     args = parser.parse_args(argv)
 
@@ -223,11 +287,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"[error] {dataset}: {err}", file=sys.stderr)
             return 1
 
-        acc = evaluate(records, stages=stages, top_k=args.top_k, isolate=args.isolate)
+        haystack = load_haystack(path.with_name(path.name.replace(".gold.jsonl", ".haystack.jsonl")))
+        mode = resolve_isolation(args.isolate, haystack)
+        acc = evaluate(records, stages=stages, top_k=args.top_k, isolate=mode, haystack=haystack)
         accs.append(acc)
         summary = summarize(acc, args.top_k)
         results[dataset] = summary
-        print(_render(f"{dataset}（{path.name}｜isolate={args.isolate}）", summary))
+        scope_note = ""
+        if haystack and mode in ("sample", "file"):
+            rows = sum(len(v) for v in haystack.values())
+            scope_note = f"｜haystack {len(haystack)} 场 / {rows} 轮"
+        print(_render(f"{dataset}（{path.name}｜isolate={mode}{scope_note}）", summary))
         print()
 
     if len(results) > 1:
