@@ -329,71 +329,152 @@ def convert_longmemeval(raw: Any) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------- LoCoMo
 
 
-def _locomo_turns(conv: dict[str, Any]) -> tuple[dict[str, tuple[str, str, date]], dict[str, date]]:
-    """展开 ``session_N`` / ``session_N_date_time``，返回 dia_id→(speaker,text,date) 与 session→date。"""
-    turns: dict[str, tuple[str, str, date]] = {}
-    session_dates: dict[str, date] = {}
-    for key in conv:
-        m = re.fullmatch(r"session_(\d+)", key)
-        if not m:
-            continue
-        no = m.group(1)
-        turns_raw = conv.get(key) or []
+_DIA_RE = re.compile(r"^D(\d*):(?:(\d+):)?(\d+)$")
+
+
+def _norm_dia(dia: Any) -> str | None:
+    """归一化 dia_id：``D30:05``→``D30:5``，``D:11:26``→``D11:26``，认不出返回 None。
+
+    LoCoMo 原始 evidence 里混着几种手误写法（``D8:6; D9:17``、``D:11:26``、
+    ``D30:05``），不归一化会静默丢掉证据 —— 丢证据等于把可答题变成无 gold。
+    """
+    text = _clean(str(dia)) if dia is not None else ""
+    if not text:
+        return None
+    m = _DIA_RE.fullmatch(text)
+    if not m:
+        return None
+    session, middle, turn = m.groups()
+    if not session and middle:
+        session, turn = middle, turn
+    if not session:
+        return None
+    return f"D{int(session)}:{int(turn)}"
+
+
+def _split_evidence(evidence: Any) -> list[str]:
+    """把 evidence 拆成单个 dia_id：兼容 ``["D8:6; D9:17"]`` 与 ``["D9:1 D4:4"]``。"""
+    if not evidence:
+        return []
+    if isinstance(evidence, str):
+        evidence = [evidence]
+    out: list[str] = []
+    for item in evidence:
+        for token in re.split(r"[;,\s]+", str(item)):
+            norm = _norm_dia(token)
+            if norm and norm not in out:
+                out.append(norm)
+    return out
+
+
+def _locomo_turn_facts(sid: str, conv: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """把一场会话的全部轮次展开成规范 fact，返回 ``[(dia_id, fact)]``（按会话顺序）。
+
+    这是 haystack 与 gold 的**同一批 fact**：id 由 ``(sample_id, 轮序)`` 决定，与问题无关。
+    同一轮在 A 题是证据、在 B 题是干扰项时仍是同一条 fact，所以
+    ``--isolate sample`` 灌一次整场会话就能让每道题在真实 haystack 里竞争。
+    """
+    sessions = sorted(
+        (int(m.group(1)), key)
+        for key in conv
+        if (m := re.fullmatch(r"session_(\d+)", key))
+    )
+    pairs: list[tuple[str, dict[str, Any]]] = []
+    seq = 0
+    for no, key in sessions:
         when = parse_date(conv.get(f"session_{no}_date_time")) or PLACEHOLDER_DATE
-        session_dates[f"D{no}"] = when
-        for i, turn in enumerate(turns_raw, start=1):
+        for i, turn in enumerate(conv.get(key) or [], start=1):
             if not isinstance(turn, dict):
                 continue
-            speaker = str(turn.get("speaker") or "speaker")
             text = _clean(turn.get("text") or turn.get("content"))
             if not text:
                 continue
-            dia = str(turn.get("dia_id") or f"D{no}:{i}")
-            turns[dia] = (speaker, text, when)
-    return turns, session_dates
+            speaker = str(turn.get("speaker") or "speaker")
+            dia = _norm_dia(turn.get("dia_id")) or f"D{no}:{i}"
+            pairs.append(
+                (
+                    dia,
+                    make_fact(
+                        "locomo", sid, seq,
+                        subject=speaker, predicate="utterance", obj=dia,
+                        statement=f"{speaker}: {text}", valid_from=when,
+                        source=f"dataset://locomo/{sid}/{dia}",
+                        topics=[dia],
+                    ),
+                )
+            )
+            seq += 1
+    return pairs
 
 
-def convert_locomo(raw: Any) -> list[dict[str, Any]]:
-    """LoCoMo（``locomo10.json``）→ 统一格式。
+def locomo_haystack(raw: Any) -> list[dict[str, Any]]:
+    """LoCoMo 的 haystack 侧：每场会话一行 ``{sample_id, facts}``。
 
-    每条 qa 的 ``evidence`` 是 dia_id 列表（``D1:3``），正好是天然 gold 标注；
-    ``category == 5`` 为对抗样本（答案 Not mentioned），转成 ``expect=abstain``。
+    单独出文件而不是塞进 gold JSONL：整场会话有 400–700 轮，逐题附带会让
+    1982 条记录膨胀到上百万行。
     """
     samples = raw if isinstance(raw, list) else (raw.get("samples") or raw.get("data") or [])
     out: list[dict[str, Any]] = []
-    for sample in samples:
-        sid = str(sample.get("sample_id") or sample.get("id") or len(out))
+    for i, sample in enumerate(samples):
+        sid = str(sample.get("sample_id") or sample.get("id") or i)
         conv = sample.get("conversation") or {}
         conv = conv if isinstance(conv, dict) else {}
-        turns, _ = _locomo_turns(conv)
+        out.append({"sample_id": sid, "facts": [f for _, f in _locomo_turn_facts(sid, conv)]})
+    return out
+
+
+def convert_locomo(raw: Any, stats: dict[str, int] | None = None) -> list[dict[str, Any]]:
+    """LoCoMo（``locomo10.json``）→ 统一格式。
+
+    每条 qa 的 ``evidence`` 是 dia_id 列表（``D1:3``），天然 gold 标注；
+    gold fact 直接指向 haystack 里的那一轮（同一 id），所以召回命中才算数。
+    ``category == 5`` 为对抗样本，转成 ``expect=abstain``。
+
+    真实数据的坑，都按「宁可跳过也不塞假 gold」处理：
+    - 4 条 category 3 没有 evidence（答案需推理），跳过并计入 ``stats["skipped"]``；
+    - ``answer`` 可能是 int（如 ``2022``），统一转字符串，否则 schema 校验不过；
+    - evidence 里混着手误写法（``D8:6; D9:17``、``D:11:26``、``D30:05``），先归一化再查表。
+    """
+    samples = raw if isinstance(raw, list) else (raw.get("samples") or raw.get("data") or [])
+    stats = stats if stats is not None else {}
+    out: list[dict[str, Any]] = []
+    for i, sample in enumerate(samples):
+        sid = str(sample.get("sample_id") or sample.get("id") or i)
+        conv = sample.get("conversation") or {}
+        conv = conv if isinstance(conv, dict) else {}
+        by_dia = dict(_locomo_turn_facts(sid, conv))
         for j, qa in enumerate(sample.get("qa") or []):
             qid = f"{sid}-qa{j}"
             category = qa.get("category")
-            answer = _clean(qa.get("answer"))
             expect = "abstain" if category == 5 else "answer"
+            raw_answer = qa.get("answer")
+            answer = _clean(str(raw_answer)) if raw_answer is not None else ""
+            if expect == "abstain" and not answer:
+                answer = "Not mentioned"  # LoCoMo 的对抗样本答案为空
+            evidence_ids = _split_evidence(qa.get("evidence"))
             gold: list[dict[str, Any]] = []
-            for k, dia in enumerate(qa.get("evidence") or []):
-                hit = turns.get(str(dia))
-                if not hit:
+            for dia in evidence_ids:
+                fact = by_dia.get(dia)
+                if fact is None:
+                    stats["missing_evidence"] = stats.get("missing_evidence", 0) + 1
                     continue
-                speaker, text, when = hit
-                gold.append(
-                    make_fact(
-                        "locomo", qid, k,
-                        subject=speaker, predicate=f"category_{category}", obj=answer,
-                        statement=f"{speaker}: {text}", valid_from=when,
-                        source=f"dataset://locomo/{sid}/{dia}",
-                        topics=[f"category_{category}"],
-                    )
-                )
+                if fact["id"] not in {g["id"] for g in gold}:
+                    gold.append(fact)
+            if expect == "abstain":
+                # 对抗样本的 evidence 指向「看似相关、实则没答到」的轮次，不是 gold
+                gold = []
+            elif not gold:
+                stats["skipped"] = stats.get("skipped", 0) + 1
+                continue
             out.append(
                 _make_record(
                     question=str(qa.get("question") or ""),
                     gold=gold[:MAX_FACTS_PER_RECORD], answer=answer, dataset="locomo",
                     expect=expect,
                     meta={
-                        "qid": qid, "category": category,
+                        "qid": qid, "category": category, "sample_id": sid,
                         "evidence": list(qa.get("evidence") or []),
+                        "evidence_dia": evidence_ids,
                     },
                 )
             )
@@ -667,7 +748,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             failed += 1
             continue
 
-        records = CONVERTERS[dataset](load_raw(raw_path))
+        stats: dict[str, int] = {}
+        converter = CONVERTERS[dataset]
+        # locomo 会吐跳过/缺失证据计数；其余数据集无此需求，保持单参签名
+        records = converter(load_raw(raw_path), stats) if dataset == "locomo" else converter(load_raw(raw_path))
         errors = validate_records(records)
         if errors:
             for err in errors[:10]:
@@ -683,6 +767,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{dataset}: {n} 条记录 → {out_path}"
             f"（gold {sum(len(r['gold_facts']) for r in records)} 条，旧事实 {n_stale} 条，对抗 {n_abstain} 条）"
         )
+        if stats:
+            print(f"  · 转换统计：{stats}")
+
+        # 有完整 haystack 的数据集（LoCoMo）额外出一个 *.haystack.jsonl，
+        # 让每道题在整场会话里竞争，而不是「索引里只有 gold」
+        if dataset == "locomo":
+            hay = locomo_haystack(load_raw(raw_path))
+            hay_path = out_path.with_name(out_path.name.replace(".gold.jsonl", ".haystack.jsonl"))
+            write_jsonl(hay, hay_path)
+            print(f"  · haystack：{len(hay)} 场会话 / {sum(len(h['facts']) for h in hay)} 轮 → {hay_path}")
     return 0 if not failed else 1
 
 
