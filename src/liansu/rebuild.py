@@ -18,10 +18,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
 from collections import Counter
 from datetime import date
 from pathlib import Path
 
+from liansu import telemetry
 from liansu.config import load_config
 from liansu.index.base import Index
 from liansu.providers.base import Embedder
@@ -36,7 +38,8 @@ PROBE_TOP_K = 5
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    from liansu.config import resolve_vault_root
+    return resolve_vault_root()
 
 
 # ---------------------------------------------------------------- ① 真源校验
@@ -179,6 +182,11 @@ def _verify_snapshot(
 # ---------------------------------------------------------------- 主流程
 
 
+def _elapsed_ms(started: float) -> float:
+    """perf_counter 起点到现在的毫秒数（保留 1 位小数）。"""
+    return round((time.perf_counter() - started) * 1000, 1)
+
+
 def rebuild(
     journal: Journal,
     indexes: dict[str, Index] | None = None,
@@ -190,7 +198,33 @@ def rebuild(
     """从 journal 全量重建索引与视图，返回一致性报告。
 
     verified 为 True 表示：无 issues 且（verify=True 时）抽样检索前后一致。
+    无论成功失败都写一条 ``kind="rebuild"`` 遥测：``ok`` 取 verified（重建完成且
+    无一致性问题），失败先记 ok=False 再原样抛出，绝不影响重建语义。
     """
+    started = time.perf_counter()
+    root = Path(journal.root).parent
+    try:
+        report = _rebuild(journal, indexes, views, verify=verify, when=when)
+    except Exception:
+        telemetry.record_at(root, "rebuild", facts=None, ms=_elapsed_ms(started), ok=False)
+        raise
+    telemetry.record_at(
+        root, "rebuild",
+        facts=report.get("facts_total"),
+        ms=_elapsed_ms(started),
+        ok=bool(report.get("verified")),
+    )
+    return report
+
+
+def _rebuild(
+    journal: Journal,
+    indexes: dict[str, Index] | None = None,
+    views: ViewBuilder | None = None,
+    verify: bool = False,
+    *,
+    when: date | None = None,
+) -> dict:
     when = when or date.today()
     indexes = dict(indexes or {})
 

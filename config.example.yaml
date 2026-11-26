@@ -1,0 +1,49 @@
+# 连溯配置示例 — 复制为 config.yaml 后按本机环境修改
+# 真实 config.yaml 含个人 vault 路径与内网地址，不纳入版本库。
+# llm.base_url / api_key / model 可用环境变量覆盖：
+# LIANSU_LLM_BASE_URL / LIANSU_LLM_API_KEY / LIANSU_LLM_MODEL
+
+llm:
+  default: openai_compatible
+  # Deskflow 场景：{deskflow_host} 由实时连接的对端 IP 自动解析，DHCP 变更无需改本文件
+  base_url: http://{deskflow_host}:8080/v1
+  api_key: dummy                            # 本地服务通常不校验
+  model: local                              # 服务端忽略 model 匹配，惯例填 local
+  timeout: 60                               # 14B 生成慢，给足超时
+  trust_env: false                          # 局域网端点禁用系统代理，避免 HTTP_PROXY 导致 502
+  deskflow:
+    enabled: true                           # 关闭后按静态 base_url 使用（占位符需手动替换）
+    source: auto                            # auto=实时连接优先，配置兜底；live=只认实时连接+fallback；config=只认配置文件
+    port: 24800                             # Deskflow 端口；从 ESTABLISHED 连接读 Windows 客户端 IP
+    # config_path: ~/Library/Deskflow/Deskflow.conf  # 不填则按 macOS/Linux 默认路径自动查找
+    health_path: /health                    # /v1 前缀会自动剥离后再拼健康端点
+    probe: true                             # 逐个候选探测 /health，跳过已失效的旧 IP
+    probe_timeout: 2
+    cache_ttl: 60                           # 秒；配置 mtime 变化会立即失效
+    fallback_host: 192.168.1.101            # 配置缺失时的最后兜底（仍需探测通过），按实际网络修改
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: false                # Qwen3 必加，否则 JSON 外混入思考文本
+
+confidence_threshold: 0.7
+top_k: 5
+
+# RRF 融合（T8）：score = Σ w_i / (k + rank_i)
+rrf:
+  k: 60
+  weights:
+    bm25: 1.0
+    vector: 1.0
+    graph: 0.5
+
+# 向量模型（可换，bge-small-zh 为中文语义基线）
+embedder:
+  model: BAAI/bge-small-zh-v1.5
+
+# vault 根：所有记忆真源与派生物的统一落点
+vault:
+  root: ~/ObsidianVault                     # 按本机 Obsidian vault 实际路径修改，支持 ~ 展开
+  journal_dir: journal
+  entities_dir: entities
+  topics_dir: topics
+  brief_file: brief.md

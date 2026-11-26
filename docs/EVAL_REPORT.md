@@ -14,7 +14,7 @@
 
 ## 2. 评测集
 
-- 路径：`evalset/own/gold.jsonl`，当前 24 条，来源自建。
+- 路径：`eval/datasets/own/gold.jsonl`，当前 24 条，来源自建。
 - 字段：
   - `question`：查询
   - `gold_facts[]`：完整 fact dict，评测只取其中的 `id` 作为 gold id
@@ -60,7 +60,7 @@
 
 ```bash
 # 全部 stage，top_k=5
-.venv/bin/python -m eval.runner --gold evalset/own/gold.jsonl --stages 0,1,2,3 --top-k 5
+.venv/bin/python -m eval.runner --gold eval/datasets/own/gold.jsonl --stages 0,1,2,3 --top-k 5
 
 # 只看关键两级，并把指标落成 JSON
 .venv/bin/python -m eval.runner --stages 0,3 --json /tmp/eval.json
@@ -99,7 +99,7 @@
 | 图路（Stage2） | 已接入 networkx GraphIndex；增益依赖真实数据中的实体关联密度 |
 | 时效（Stage3） | 逻辑已接入；**区分度前提是库内真实存在被 supersede 的旧事实**，否则全为 1.0 无信息量 |
 | token 成本 | 占位（`None`），待生成/重排接入 |
-| 抽取 precision | 未做，需人工抽检（T14 gold 集不含抽取错误样本） |
+| 抽取 precision | 本报告未覆盖（gold 集不含抽取错误样本）；已另建端到端入口 `eval/e2e_runner.py`，见 `docs/e2e-eval.md` |
 | 公开集 | 未接入 |
 
 ### 待填充指标表
@@ -129,7 +129,7 @@ TASKS.md 要求「评测 → 诊断 → 调参 → 回归」：
 | 时效列低于 1.0 | 检查 supersede 事件是否完整、`when` 语义（左闭右开） | `vault/journal.py`、`Fact.is_valid_at` |
 | 抽取噪声多、gold 命中但答案错 | 提高阈值后复测 HitRate/Recall 是否掉太多 | `config.yaml: confidence_threshold` |
 
-每次调参后固定用同一条命令回归：`--gold evalset/own/gold.jsonl --stages 0,1,2,3 --top-k 5`。
+每次调参后固定用同一条命令回归：`--gold eval/datasets/own/gold.jsonl --stages 0,1,2,3 --top-k 5`。
 
 ## 8. 已知局限
 

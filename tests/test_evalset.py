@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-GOLD = Path(__file__).resolve().parents[1] / "evalset" / "own" / "gold.jsonl"
+GOLD = Path(__file__).resolve().parents[1] / "eval" / "datasets" / "own" / "gold.jsonl"
 
 # 每条 gold fact 必须携带的最小字段（对齐 liansu.schema.Fact 的必填字段）
 FACT_FIELDS = {

@@ -1,0 +1,33 @@
+name: 功能建议
+description: 提出新能力或改进建议
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 描述使用场景与当前痛点，而不是直接给实现方案
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望方案
+      description: 期望的行为、接口或评测口径
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案与权衡
+    validations:
+      required: false
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: 影响范围
+      options:
+        - label: 涉及 MCP 协议或 CLI 接口
+        - label: 涉及真源写入格式或 rebuild
+        - label: 涉及评测口径变化

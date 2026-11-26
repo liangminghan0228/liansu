@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from liansu.config import load_config           # noqa: E402
+from liansu.deskflow import DeskflowEndpointResolver, DeskflowResolveError  # noqa: E402
 from liansu.index.bm25 import BM25Index          # noqa: E402
 from liansu.index.fuse import FuseIndex          # noqa: E402
 from liansu.vault.journal import Journal         # noqa: E402
@@ -28,7 +29,12 @@ def _line(mark: str, text: str) -> None:
 
 
 def check_llm(cfg: dict) -> bool:
-    base = (cfg.get("llm") or {}).get("base_url", "").rstrip("/")
+    try:
+        base = DeskflowEndpointResolver(cfg.get("llm") or {}).current_base_url(force=True)
+    except DeskflowResolveError as e:
+        _line(BAD, f"Deskflow 动态地址解析失败: {e}")
+        return False
+    base = base.rstrip("/")
     if base.endswith("/v1"):          # /health 在根路径，不属于 OpenAI 兼容前缀
         base = base[:-3]
     if not base:

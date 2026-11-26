@@ -215,7 +215,7 @@ flowchart LR
 
 | 项 | 值 | 备注 |
 |---|---|---|
-| 主机 | `192.168.0.101` | **IP 会变**（曾 `.103`→`.100`→`.101`，2026-11-23 实测）。找不到时用 DeskFlow 的客户端连接反查：`lsof -nP -iTCP:24800 \| grep ESTABLISHED \| head -1` 看对端 IP；每次接入前 `curl /health` 确认 |
+| 主机 | `192.168.0.101` | **IP 会变**（曾 `.103`→`.100`→`.101`，2026-11-23 实测）。已自动化：从 Deskflow 已建立连接反查对端 IP（`lsof -nP -iTCP:24800 -sTCP:ESTABLISHED`），每次调用实时读取；`curl /health` 由 resolver 内置 |
 | 推理服务 | llama.cpp `llama-server`，端口 **8080** | OpenAI Chat Completions 协议 |
 | base_url | `http://192.168.0.100:8080/v1` | 带 `/v1`，SDK 会拼 `/chat/completions` |
 | api_key | `dummy` | 本地服务不校验，随意填 |
@@ -225,6 +225,8 @@ flowchart LR
 | **必加参数** | `"chat_template_kwargs": {"enable_thinking": false}` | Qwen3 默认开 thinking，不关会在 JSON 外混入思考文本 |
 | 端点状态 | `/v1/chat/completions` 200、`/v1/models` 200、`/health` 200；**`/api/chat`、`/api/generate` 404** | **不是 Ollama 协议**，不能把 Ollama client 的 base_url 直接指过来 |
 | 实测延迟 | prompt 543ms / 2 token 24ms（短回复） | 本地局域网上限主要受 14B 推理速度约束 |
+
+**DHCP 自适应（已实现）**：`config.yaml` 的 `base_url` 用模板 `http://{deskflow_host}:8080/v1`。实际拓扑是 **macOS 跑 Deskflow server、Windows 跑 client**，所以 `src/liansu/deskflow.py` 优先用 `lsof -nP -iTCP:24800 -sTCP:ESTABLISHED` 读取已连接客户端的远端 IP——Windows 服务/Deskflow 每次启动重连后，这个 IP 就是 DHCP 最新地址，liansu 每次调用接口都会实时读取，不依赖静态配置。实时连接不可用时才退回 Deskflow 配置 `[client] remoteHost`（本机作为 client 的拓扑）与 `fallback_host`。候选地址剥离 `/v1` 后逐个探测 `/health`；`ApiProvider` 在连接失败时强制重读并重建 OpenAI client。运维检查：`.venv/bin/liansu endpoint --refresh`（输出 `source=live` 即命中实时连接）。
 
 **业务层 8001（memory-server）**：`POST /extract` 接收 `{text, speaker}`，返回 `{memories:[{type, content, importance}]}`，内部调 8080；另有 `/health`、`/metrics`。
 

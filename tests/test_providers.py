@@ -88,6 +88,50 @@ def test_gate_false_via_rule_pure_code_skips_llm(openai_ctor):
     client.chat.completions.create.assert_not_called()
 
 
+def test_gate_prompt_covers_known_false_negatives(openai_ctor):
+    """固化口径：技术叙述与状态更新必须放行，防止 prompt 回退到按语气判定。"""
+    openai_ctor.return_value = _client(
+        json.dumps({"category": "长期事实", "worth_remembering": True, "reason": "含项目事实"}, ensure_ascii=False)
+    )
+    provider = ApiProvider(CFG)
+    provider.gate(MEANINGFUL_DIALOG)
+    system = provider._client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    for phrase in ("按「内容」判定", "客观属性/状态更新", "项目与技术栈事实",
+                   "整段都无可复用事实", "82 公斤", "MCP", "BM25"):
+        assert phrase in system, f"gate prompt 缺少关键口径: {phrase}"
+    assert system.count('"worth_remembering"') >= 4  # 至少 4 条 few-shot 示例
+
+
+def test_gate_schema_category_is_enum(openai_ctor):
+    """category 走枚举，避免模型自造标签污染下游诊断。"""
+    openai_ctor.return_value = _client(
+        json.dumps({"category": "长期事实", "worth_remembering": True, "reason": "x"}, ensure_ascii=False)
+    )
+    provider = ApiProvider(CFG)
+    provider.gate(MEANINGFUL_DIALOG)
+    fmt = provider._client.chat.completions.create.call_args.kwargs["response_format"]
+    category = fmt["json_schema"]["schema"]["properties"]["category"]
+    assert set(category["enum"]) == {"长期事实", "纯代码改动", "闲聊"}
+    assert "可复用事实" in fmt["json_schema"]["schema"]["properties"]["reason"]["description"]
+
+
+def test_extract_prompt_covers_coverage_and_vocabulary(openai_ctor):
+    """固化抽取口径：项目/技术栈不得省略、并列值拆开、predicate 走固定词表。
+
+    背景（2026-11-26 端到端实测）：prompt 未列覆盖要求时，模型稳定漏抽「在做连溯」
+    这类项目事实、把「RAG 和多 Agent」合并成一个 object、并自造「体重变化」谓词。
+    """
+    openai_ctor.return_value = _client(json.dumps({"facts": [FACT_DICT]}, ensure_ascii=False))
+    provider = ApiProvider(CFG)
+    provider.extract(MEANINGFUL_DIALOG)
+    system = provider._client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    for phrase in ("当前项目", "技术方向", "编程语言", "并列多值拆开",
+                   "assistant 的复述", "体重变化", "研究领域"):
+        assert phrase in system, f"extract prompt 缺少关键口径: {phrase}"
+    # 三类正例各自要能对上（求职/技术栈/体重更新）
+    assert system.count('"predicate"') >= 6
+
+
 # ---- extract：schema 约束 / 校验 / 重试 ----------------------------------
 def test_extract_success_with_full_fact_schema(openai_ctor):
     openai_ctor.return_value = _client(json.dumps({"facts": [FACT_DICT]}, ensure_ascii=False))
@@ -284,3 +328,26 @@ def test_fill_fact_ids_are_unique_across_calls():
     a = _fill_fact(base, source="e2e://")["id"]
     b = _fill_fact(base, source="e2e://")["id"]
     assert a != b and a != "fact_001" and b != "fact_001"
+
+
+# ---- http client：局域网端点必须绕开系统代理 ------------------------------
+
+
+def test_http_client_disables_system_proxy():
+    """回归：曾因 `import httpx` 失败而静默退回 openai 默认 client，
+    trust_env=True 读到 HTTP_PROXY → 内网请求被发进代理 → 502。"""
+    from liansu.providers.api import _build_http_client, _http_lib
+
+    lib = _http_lib()
+    if lib is None:
+        pytest.skip("环境里既没有 httpx2 也没有 httpx")
+    client = _build_http_client(trust_env=False, timeout=3.0)
+    assert client is not None
+    assert getattr(client, "_trust_env", None) is False
+
+
+def test_api_provider_hands_http_client_to_openai(openai_ctor):
+    ApiProvider(config=CFG)
+    kwargs = openai_ctor.call_args.kwargs
+    assert kwargs.get("http_client") is not None
+    assert getattr(kwargs["http_client"], "_trust_env", None) is False

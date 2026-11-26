@@ -4,7 +4,7 @@
 
 ## 统一格式
 
-转换后每个数据集产出一个 JSONL 文件，每行一条，字段与自建集 `evalset/own/gold.jsonl` 完全一致：
+转换后每个数据集产出一个 JSONL 文件，每行一条，字段与自建集 `eval/datasets/own/gold.jsonl` 完全一致：
 
 ```json
 {"question": "...", "gold_facts": [{"id": "...", "subject": "...", "predicate": "...", "object": "...", "statement": "...", "valid_from": "YYYY-MM-DD", "confidence": 0.9, "topics": ["..."], "source": "..."}], "answer": "...", "source": "LongMemEval"}
@@ -21,7 +21,7 @@
 | **HotpotQA** | 官网 `hotpotqa.github.io`（`hotpot_train_v1.1.json` 等） | 维基多跳问答，BM25/图召回基线 | 用 `question`/`answer`；`context` 中两条支撑段落转成两条 fact；无真实日期时 `valid_from` 用统一占位日（如 `2000-01-01`）并在文档注明 |
 | **FreshQA** | GitHub：`freshqa`(Future-Land/Google) 官方仓库 | 含时效变化与世界知识更新 | 已有 `questions.json`；`answer` 与 `latest_answer` 取最新值；旧答案对应的实体状态转成被 supersede 的旧事实，标注 `must_not_include` |
 
-> 通用转换脚本骨架建议放在 `evalset/public/convert.py`（本任务不要求实现）：读原始 JSON → 抽取 question/answer/evidence → 用 `liansu.schema.Fact` 校验每条 gold fact → 写 JSONL。`confidence` 无原始标注时统一填 `0.9`。
+> 通用转换脚本骨架建议放在 `eval/datasets/public/convert.py`（本任务不要求实现）：读原始 JSON → 抽取 question/answer/evidence → 用 `liansu.schema.Fact` 校验每条 gold fact → 写 JSONL。`confidence` 无原始标注时统一填 `0.9`。
 
 ## 许可与注意事项
 

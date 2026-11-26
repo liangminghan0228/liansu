@@ -6,7 +6,7 @@
 
 用法（在项目根执行）：
 
-    .venv/bin/python -m eval.runner --gold evalset/own/gold.jsonl --stages 0,1,2,3 --top-k 5
+    .venv/bin/python -m eval.runner --gold eval/datasets/own/gold.jsonl --stages 0,1,2,3 --top-k 5
 
 评测不强依赖 LLM：不传 provider 时跳过 judge，只算检索/时效指标。
 """
@@ -26,7 +26,7 @@ if str(_SRC) not in sys.path:  # 允许 `python -m eval.runner` 直接跑，无�
 
 from eval.metrics import hit_rate, mrr, recall_at_k, temporal_accuracy  # noqa: E402
 
-DEFAULT_GOLD = Path("evalset/own/gold.jsonl")
+DEFAULT_GOLD = Path("eval/datasets/own/gold.jsonl")
 DEFAULT_STAGES: tuple[int, ...] = (0, 1, 2, 3)
 DEFAULT_TOP_K = 5
 

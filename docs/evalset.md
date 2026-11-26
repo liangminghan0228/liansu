@@ -7,12 +7,17 @@
 ## 2. 目录结构
 
 ```
-evalset/
+eval/datasets/
 ├── own/
-│   └── gold.jsonl        # 自建集（核心产出，24 条 question）
+│   ├── gold.jsonl        # 检索集（24 条 question，gold fact 已在库）
+│   └── e2e.jsonl         # 端到端集（5 条对话，抽取→落盘→召回，见 docs/e2e-eval.md）
 └── public/
     └── README.md         # 公开集下载来源与转换说明（不实际下载）
 ```
+
+> `gold.jsonl` 与 `e2e.jsonl` 是两套口径：前者按 fact **id** 比对（前提是 fact 已经在库里），
+> 后者从原始对话出发，按 `(subject, predicate, object)` **语义**比对（抽取出的 id 是随机生成的，
+> 无法预知）。字段与判分差异见 `docs/e2e-eval.md`。
 
 ## 3. 统一格式
 
@@ -86,7 +91,7 @@ evalset/
 
 ## 6. 如何扩充
 
-1. 在 `evalset/own/gold.jsonl` 追加一行，字段照 §3 填写；question 必须非空、gold_facts 非空。
+1. 在 `eval/datasets/own/gold.jsonl` 追加一行，字段照 §3 填写；question 必须非空、gold_facts 非空。
 2. 新增 fact 沿用 `F-YYYYMMDD-NNN` id 规则；`confidence` 落在 [0,1]；`source` 用 `vault://journal/...`。
 3. 涉及"当前状态"且存在旧说法的，务必加 `must_not_include` 指向旧 id，并让 gold_facts 只含新事实。
 4. 跑 `./.venv/bin/python -m pytest tests/test_evalset.py -q` 校验格式。
@@ -94,7 +99,7 @@ evalset/
 
 ## 7. 公开集
 
-见 `evalset/public/README.md`：列出 LongMemEval（首选，含时序/知识更新）、LoCoMo、HotpotQA、FreshQA 的下载来源与转换为统一格式的方法。本仓库不实际下载原始数据。
+见 `eval/datasets/public/README.md`：列出 LongMemEval（首选，含时序/知识更新）、LoCoMo、HotpotQA、FreshQA 的下载来源与转换为统一格式的方法。本仓库不实际下载原始数据。
 
 ## 8. 校验
 

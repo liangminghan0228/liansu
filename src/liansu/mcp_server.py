@@ -10,11 +10,14 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
 
+from liansu import telemetry
 from liansu.config import load_config
 from liansu.extract.pipeline import Pipeline
 from liansu.index.bm25 import BM25Index
@@ -33,7 +36,9 @@ _CTX: dict[str, Any] | None = None
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    """vault 根目录；显式/LIANSU_ROOT 可覆盖，默认取 config.vault.root（Obsidian）。"""
+    from liansu.config import resolve_vault_root
+    return resolve_vault_root()
 
 
 def build_context(config: dict | None = None, root: Path | None = None) -> dict[str, Any]:
@@ -96,6 +101,19 @@ def _err(code: str, msg: str) -> dict:
     return {"ok": False, "error_code": code, "error": msg}
 
 
+def _telemetry(ctx: dict, kind: str, /, **fields: Any) -> None:
+    """按 ctx 的 vault 根写一条遥测事件；任何异常都吞掉（不允许影响工具返回）。"""
+    try:
+        telemetry.record_at(ctx.get("root"), kind, **fields)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _elapsed_ms(started: float) -> float:
+    """从 perf_counter 起点算到现在的毫秒数（保留 1 位小数）。"""
+    return round((time.perf_counter() - started) * 1000, 1)
+
+
 # ---------------- 工具实现（可单测） ----------------
 
 def record_impl(ctx: dict, dialog: str, source: str = "") -> dict:
@@ -108,29 +126,61 @@ def record_impl(ctx: dict, dialog: str, source: str = "") -> dict:
 
 
 def recall_impl(ctx: dict, query: str, top_k: int | None = None, stage: int = 3) -> dict:
+    """混合检索；成功/失败都不影响返回，只在成功时写 ``kind="recall"`` 遥测。
+
+    遥测里 ``stale_filtered`` 目前取不到精确数（时效过滤发生在 FuseIndex 内部），
+    按契约给 null，聚合层只累加非 null 值。
+    """
+    started = time.perf_counter()
     try:
         k = top_k or ctx.get("top_k", 5)
         results = ctx["fuse"].recall(query, top_k=k, stage=stage)
+        _telemetry(
+            ctx, "recall",
+            query=query[:200],
+            top_k=k,
+            stage=stage,
+            ids=[r.fact_id for r in results],
+            scores=[r.score for r in results],
+            stale_filtered=None,
+            ms=_elapsed_ms(started),
+        )
         return {"ok": True, "results": [r.to_dict() for r in results], "count": len(results)}
     except Exception as e:
         return _err("RECALL_FAILED", str(e))
 
 
 def expand_impl_tool(ctx: dict, fact_id: str, hops: int = 1, max_results: int = 10) -> dict:
+    started = time.perf_counter()
     try:
         facts = expand_impl(ctx["graph"], fact_id, hops=hops, max_results=max_results)
+        _telemetry(
+            ctx, "expand",
+            fact_id=fact_id,
+            hops=hops,
+            ids=[f.id for f in facts],
+            ms=_elapsed_ms(started),
+        )
         return {"ok": True, "facts": [f.to_dict() for f in facts], "count": len(facts)}
     except Exception as e:
         return _err("EXPAND_FAILED", str(e))
 
 
 def brief_impl(ctx: dict, max_tokens: int = 500) -> dict:
+    """生成全局摘要；遥测 ``facts`` 取摘要正文里的条目数（``- `` 开头的行）。"""
+    started = time.perf_counter()
     try:
         ctx["views"].rebuild()
         brief_path = Path(ctx["root"]) / "vault_views" / "brief.md"
         text = brief_path.read_text(encoding="utf-8") if brief_path.exists() else ""
         if max_tokens and len(text) > max_tokens * 2:   # 粗估 1 token ~ 2 字符
             text = text[: max_tokens * 2]
+        _telemetry(
+            ctx, "brief",
+            chars=len(text),
+            facts=sum(1 for line in text.splitlines() if line.startswith("- ")),
+            ms=_elapsed_ms(started),
+        )
         return {"ok": True, "brief": text, "chars": len(text)}
     except Exception as e:
         return _err("BRIEF_FAILED", str(e))

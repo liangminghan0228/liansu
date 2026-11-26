@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
+from liansu import telemetry
 from liansu.extract.extractor import DEFAULT_CONFIDENCE_THRESHOLD, extract_facts
 from liansu.extract.gate import worth_recording
 from liansu.index.base import Index
@@ -20,7 +22,8 @@ from liansu.vault.journal import Journal
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    from liansu.config import resolve_vault_root
+    return resolve_vault_root()
 
 
 class Pipeline:
@@ -57,8 +60,39 @@ class Pipeline:
         payload = json.dumps({"source": source, "dialog": dialog}, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+    # ---- 遥测 ----
+    def _telemetry_root(self) -> Path:
+        """遥测落盘根：journal 目录的父目录即 vault 根（测试用 tmp_path 时自动隔离）。"""
+        return Path(self.journal.root).parent
+
+    def _telemetry_model(self) -> str | None:
+        """provider 上的模型名（有的 provider 没有该属性）；取不到给 None。"""
+        model = getattr(self.provider, "model", None)
+        return model if isinstance(model, str) and model else None
+
+    def _emit_extract(self, gate: str, written: list[Fact], superseded: list[str],
+                      chars: int, ms: float) -> None:
+        """写一条 extract 遥测；失败由 telemetry 吞掉，不影响写路径。"""
+        telemetry.record_at(
+            self._telemetry_root(), "extract",
+            gate=gate,
+            written=[fact.id for fact in written],
+            superseded=list(superseded),
+            chars=chars,
+            ms=round(ms, 1),
+            model=self._telemetry_model(),
+        )
+
     # ---- 主流程 ----
     def record(self, dialog: list[dict[str, str]], source: str = "") -> list[Fact]:
+        """gate → 抽取 → confidence → supersede → append 真源 → 增量索引。
+
+        幂等命中（同 source + 同对话哈希）直接返回空且不写遥测；
+        否则每次实际运行都写一条 ``kind="extract"`` 事件（gate 拒绝也算一次 runs）。
+        """
+        started = time.perf_counter()
+        chars = sum(len(str(turn.get("content", ""))) for turn in dialog if isinstance(turn, dict))
+
         h = self.dialog_hash(dialog, source)
         if h in self._processed:
             return []
@@ -66,14 +100,16 @@ class Pipeline:
         if not worth_recording(dialog, self.provider):
             self._processed.add(h)
             self._save_processed()
+            self._emit_extract("reject", [], [], chars, time.perf_counter() - started)
             return []
 
         facts = extract_facts(
             self.provider, dialog, source=source, confidence_threshold=self.confidence_threshold
         )
         written: list[Fact] = []
+        superseded: list[str] = []
         for fact in facts:
-            written.append(self._write_one(fact))
+            written.append(self._write_one(fact, superseded=superseded))
 
         if written and self.indexes:
             for idx in self.indexes:
@@ -81,10 +117,15 @@ class Pipeline:
 
         self._processed.add(h)
         self._save_processed()
+        self._emit_extract("pass", written, superseded, chars, time.perf_counter() - started)
         return written
 
-    def _write_one(self, fact: Fact) -> Fact:
-        """单条落盘：命中同 subject+predicate 则 supersede 旧事实，否则纯 append。"""
+    def _write_one(self, fact: Fact, superseded: list[str] | None = None) -> Fact:
+        """单条落盘：命中同 subject+predicate 则 supersede 旧事实，否则纯 append。
+
+        ``superseded`` 是可选输出参数：真正取代旧事实时把旧 id 追加进去，
+        供遥测记录被取代的列表（完全同值的跳过不计）。
+        """
         existing = self.journal.find_by_key(fact.subject, fact.predicate)
         if existing is not None and existing.id != fact.id:
             if existing.object == fact.object and existing.valid_from == fact.valid_from:
@@ -92,6 +133,8 @@ class Pipeline:
             fact = fact.model_copy(update={"supersedes": existing.id})
             self.journal.append(fact)
             self.journal.supersede(existing.id, fact.id, at=datetime.now(), when=fact.valid_from)
+            if superseded is not None:
+                superseded.append(existing.id)
         else:
             self.journal.append(fact)
         return fact

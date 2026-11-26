@@ -2,9 +2,9 @@
 """连溯 demo：一段会话 -> record -> recall -> expand 全链路演示。
 
 用法：
-  python demo.py            # 用 MockProvider，离线可跑，演示链路
-  python demo.py --real     # 用真实 Windows LLM 服务（需 /health 可达）
-  python demo.py --real --embed   # 额外加载 bge 向量模型（首次会下载）
+  python examples/demo.py            # 用 MockProvider，离线可跑，演示链路
+  python examples/demo.py --real     # 用真实 Windows LLM 服务（需 /health 可达）
+  python examples/demo.py --real --embed   # 额外加载 bge 向量模型（首次会下载）
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import tempfile
 from datetime import date, datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from liansu.config import load_config
 from liansu.extract.pipeline import Pipeline
@@ -61,9 +61,9 @@ def main() -> int:
     if real:
         from liansu.providers.api import ApiProvider
         provider = ApiProvider(config=cfg)
-        print(f"[mode] 真实 LLM: {cfg['llm']['base_url']} model={cfg['llm']['model']}")
+        print(f"[mode] 真实 LLM: {provider.base_url} model={cfg['llm']['model']}")
     else:
-        sys.path.insert(0, str(Path(__file__).resolve().parent / "tests" / "fixtures"))
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests" / "fixtures"))
         from mock_provider import MockProvider
         provider = MockProvider(facts=demo_facts("demo://offline"))
         print("[mode] MockProvider（离线演示）")

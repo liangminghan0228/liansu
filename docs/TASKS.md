@@ -49,7 +49,7 @@ liansu/
 │   ├── rebuild.py             # T12
 │   └── cli.py                 # T3/T16 命令行入口
 ├── tests/fixtures/            # T0 建，各 task 复用
-├── evalset/                   # T14
+├── eval/datasets/                   # T14
 │   ├── public/
 │   └── own/gold.jsonl
 ├── docs/
@@ -288,7 +288,7 @@ flowchart LR
 
 ### T14 · 评测集构建（完全独立，最早可开工）
 - **前置**：无（只用约定好的 JSON 格式）｜ **波次**：W1 ｜ **可并行**：是
-- **产出**：`evalset/public/*`、`evalset/own/gold.jsonl`、`docs/evalset.md`
+- **产出**：`eval/datasets/public/*`、`eval/datasets/own/gold.jsonl`、`docs/evalset.md`
 - **步骤**
   1. 下载公开集：LongMemEval（首选，含时序/知识更新）、LoCoMo、HotpotQA、FreshQA
   2. 统一格式：`{question, gold_facts[], answer, source}`
@@ -298,12 +298,13 @@ flowchart LR
 
 ### T15 · 评测框架与消融
 - **前置**：T8 + T14 ｜ **波次**：W3 ｜ **可并行**：是
-- **产出**：`eval/runner.py`、`eval/metrics.py`、`docs/EVAL_REPORT.md`
+- **产出**：`eval/runner.py`、`eval/metrics.py`、`docs/EVAL_REPORT.md`；端到端改造：`eval/e2e_runner.py`、`eval/match.py`、`eval/fixture_provider.py`、`eval/datasets/own/e2e.jsonl`、`docs/e2e-eval.md`
 - **步骤**
   1. 分阶段消融：Stage0 BM25 → +向量 → +图 → +时效 → +LLM重排，逐级记录边际增益
   2. 指标：HitRate / Recall@K / MRR、Faithfulness / Answer Relevancy、时效正确率、抽取 precision（人工抽检）、每 query token 与延迟
   3. Judge：复用 T2 的 `judge()`，本地模型或 API 走 config
   4. 闭环：用结果反调 confidence 阈值、RRF 权重、top_k，回归复测
+  5. 端到端：从原始对话跑 gate → 抽取 → supersede → 召回，判抽取 P/R + 谓词规范率 + supersede 触发 + 旧值残留（`--provider stub` 自检链路，`real` 测模型）
 - **DoD**：一键跑出各 Stage 指标对比表；能回答「图/重排带来的增益是否值成本」；报告可开源
 
 ### T16 · 开源整理与交付

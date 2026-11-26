@@ -1,0 +1,40 @@
+name: Bug 报告
+description: 报告可复现的行为异常
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: 请避免在公开 Issue 中粘贴真实记忆数据、API key 或个人路径。
+  - type: textarea
+    id: what
+    attributes:
+      label: 问题描述
+      description: 期望行为与实际行为分别是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 最小复现命令或操作序列
+      placeholder: |
+        1. .venv/bin/python examples/demo.py
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      description: Python 版本、操作系统、commit hash
+      placeholder: "Python 3.11 / macOS 15 / 66e8ad3"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或截图
+      description: 可裁剪敏感信息后粘贴关键输出
+    validations:
+      required: false

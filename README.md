@@ -6,7 +6,7 @@
 
 ## 状态
 
-17 个开发任务全部落地，**135 个单测 + 25 项端到端断言全部通过**，5 个 MCP 工具可用，`record → recall → expand` 全链路在真实 LLM 上跑通。
+17 个开发任务全部落地，**220 个单测 + 25 项端到端断言全部通过**，5 个 MCP 工具可用，`record → recall → expand` 全链路在真实 LLM 上跑通。
 
 ## 核心设计
 
@@ -17,7 +17,7 @@
 | 全自动写入 | 宿主 Stop hook → LLM gate → 抽取 → confidence 门控 → supersede → append |
 | 按需检索 | 规则引导 agent 主动调 `recall`，不每 session 强注入 |
 | 时效内建 | 每条 fact 带 `valid_from`/`valid_to`，能回答「现在是否成立」 |
-| 模型解耦 | provider 层统一；默认走 Windows 主机 OpenAI-compatible /v1，config 一处切换 |
+| 模型解耦 | provider 层统一；默认走 Windows 主机 OpenAI-compatible /v1，base_url 优先取 Deskflow 实时连接对端 IP，DHCP 漂移无需改配置 |
 
 ## 架构
 
@@ -52,11 +52,15 @@ flowchart TB
 # 依赖（Python >= 3.11）
 python -m venv .venv && .venv/bin/pip install -e .
 
-# 离线演示完整链路（record → recall → expand → 时效）
-.venv/bin/python demo.py
+# 本地配置（真实 config.yaml 含个人路径/内网地址，不入库；不复制则用示例配置直接跑）
+cp config.example.yaml config.yaml
 
-# 用真实 Windows LLM 服务跑（先 curl /health 确认 IP）
-.venv/bin/python demo.py --real
+# 离线演示完整链路（record → recall → expand → 时效）
+.venv/bin/python examples/demo.py
+
+# 用真实 Windows LLM 服务跑（从 Deskflow 实时连接读 IP，无需手改 base_url）
+.venv/bin/python examples/demo.py --real
+.venv/bin/liansu endpoint --refresh        # 查看实时 IP、来源（source=live）与健康状态
 ```
 
 ## 接入 WorkBuddy / Codex
@@ -86,37 +90,59 @@ python -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/liansu expand F-20261122-001 --hops 1
 .venv/bin/liansu brief --max-tokens 500
 .venv/bin/liansu rebuild --verify
+.venv/bin/liansu metrics --json            # 遥测聚合（DSH 记忆插件数据源）
+.venv/bin/liansu metrics --json --session s1 --days 7
+.venv/bin/liansu health --json              # 服务可用性自检（不可用时退出码 1）
+.venv/bin/liansu health --json --no-llm     # 跳过 LLM 网络探测
+.venv/bin/liansu endpoint --refresh         # Deskflow 动态 IP 当前解析结果
 ```
 
 ## 目录
 
 ```
-src/liansu/
-├── schema.py          Fact 模型（三元组 + statement + 双时态）
-├── config.py          config 加载 + 环境变量覆盖
-├── providers/         LLM provider（OpenAI 兼容 / Ollama）+ Embedder + bge
-├── vault/             journal 真源 + views 派生视图
-├── capture/           zstd/jsonl 会话解析 + Stop hook
-├── extract/           gate / extractor / pipeline 写路径
-├── index/             bm25 / vector / graph / fuse / expand 读路径
-├── mcp_server.py      5 个 MCP 工具
-├── rebuild.py         全量重建
-└── cli.py             命令行入口
-eval/                  评测指标 + 消融 runner
-evalset/               自建 gold.jsonl（24 题，含时效样本）
+.
+├── .github/                   Issue/PR 模板与 CI
+├── src/liansu/                生产代码（src layout）
+│   ├── schema.py              Fact 模型（三元组 + statement + 双时态）
+│   ├── config.py              config 加载 + 环境变量覆盖
+│   ├── deskflow.py            Deskflow 实时连接对端 IP 解析 + /health 探测 + 缓存
+│   ├── providers/             LLM provider（OpenAI 兼容 / Ollama）+ Embedder + bge
+│   ├── vault/                 journal 真源 + views 派生视图
+│   ├── capture/               zstd/jsonl 会话解析 + Stop hook
+│   ├── extract/               gate / extractor / pipeline 写路径
+│   ├── index/                 bm25 / vector / graph / fuse / expand 读路径
+│   ├── mcp_server.py          5 个 MCP 工具
+│   ├── rebuild.py             全量重建
+│   └── cli.py                 命令行入口
+├── tests/                     单元测试与 fixtures
+├── eval/                      评测 runner + 指标
+│   └── datasets/              检索集 gold.jsonl（24 题）+ 端到端集 e2e.jsonl（5 条对话）
+├── examples/demo.py           离线/真实链路演示
+├── scripts/                   端到端与运维脚本
+├── docs/                      技术方案、任务、评测与接入文档
+├── config.example.yaml        配置示例（真实 config.yaml 不入库）
+├── CHANGELOG.md               变更日志
+├── CONTRIBUTING.md            贡献指南
+├── CODE_OF_CONDUCT.md         行为准则
+└── SECURITY.md                安全策略
 ```
 
 ## 评测
 
 ```bash
-.venv/bin/python -m pytest tests/ -q        # 135 个单测（全 mock，约 1s）
+.venv/bin/python -m pytest tests/ -q        # 220 个单测（全 mock，约 2s）
 .venv/bin/python scripts/e2e_real.py        # 端到端真实链路（真实 LLM + bge，约 30s）
-.venv/bin/python -m eval.runner --gold evalset/own/gold.jsonl --stages 0 1 2 3
+.venv/bin/python -m eval.runner --gold eval/datasets/own/gold.jsonl --stages 0,1,2,3
+.venv/bin/python -m eval.e2e_runner --provider stub   # 抽取→落盘→召回，离线冒烟
+.venv/bin/python -m eval.e2e_runner --provider real   # 同上，走真实 LLM（测抽取质量）
 ```
 
-分阶段消融：Stage0 仅 BM25 → +向量 → +图 → +时效，逐级记录 HitRate/Recall/MRR/时效正确率。数字待真实 vault + bge 模型到位后填入 `docs/EVAL_REPORT.md`。
+两套口径：
 
-端到端测试走 `build_context()` 生产装配，从 MCP 协议层进入，覆盖 record → 真源 → 三路索引 → 消融检索 → expand → 视图 → rebuild → 幂等 → stdio 子进程共 25 项断言。首轮跑通即发现并修复 5 个 mock 测不出的缺陷（fact id 跨批重复、模型编造日期、`"null"` 字符串、SQLite 跨线程、source 被覆盖），详见 `docs/E2E_REPORT.md`。
+- `eval.runner`：**检索消融**。前提是 gold fact 已在库，Stage0 仅 BM25 → +向量 → +图 → +时效，逐级看 HitRate/Recall/MRR/时效正确率。数字待真实 vault + bge 模型到位后填入 `docs/EVAL_REPORT.md`。
+- `eval.e2e_runner`：**端到端**。从原始对话出发，跑 gate → 抽取 → confidence → supersede → 落盘 → 召回，同时判抽取 P/R、谓词规范率、supersede 是否触发、旧值残留、命中与时效。`--provider stub` 只用标注验证评测链路（指标必然接近满分，不作结论），`--provider real` 才是模型能力数字。详见 `docs/e2e-eval.md`。
+
+端到端测试（`scripts/e2e_real.py`）走 `build_context()` 生产装配，从 MCP 协议层进入，覆盖 record → 真源 → 三路索引 → 消融检索 → expand → 视图 → rebuild → 幂等 → stdio 子进程共 25 项断言。首轮跑通即发现并修复 5 个 mock 测不出的缺陷（fact id 跨批重复、模型编造日期、`"null"` 字符串、SQLite 跨线程、source 被覆盖），详见 `docs/E2E_REPORT.md`。
 
 ## 已知限制
 
@@ -132,8 +158,13 @@ evalset/               自建 gold.jsonl（24 题，含时效样本）
 - [接入指南](docs/integration.md)
 - [hook 实验](docs/hook-probe.md)
 - [评测集说明](docs/evalset.md)
+- [端到端评测（抽取→检索）](docs/e2e-eval.md)
 - [面试讲稿](docs/INTERVIEW.md)
+- [变更日志](CHANGELOG.md)
+- [贡献指南](CONTRIBUTING.md)
+- [行为准则](CODE_OF_CONDUCT.md)
+- [安全策略](SECURITY.md)
 
 ## License
 
-MIT
+[MIT](LICENSE)

@@ -48,3 +48,27 @@ def test_config_env_override(monkeypatch):
     cfg = load_config()
     assert cfg["llm"]["base_url"] == "http://example:9999/v1"
     assert cfg["confidence_threshold"] == 0.7
+
+
+def test_vault_root_priority(monkeypatch, tmp_path):
+    """vault 根解析：显式 > LIANSU_ROOT > config.vault.root > 仓库根。"""
+    from liansu.config import resolve_vault_root
+
+    cfg = {"vault": {"root": "/tmp/config-vault"}}
+    monkeypatch.delenv("LIANSU_ROOT", raising=False)
+    assert resolve_vault_root(cfg=cfg) == Path("/tmp/config-vault").resolve()
+
+    monkeypatch.setenv("LIANSU_ROOT", str(tmp_path))
+    assert resolve_vault_root(cfg=cfg) == tmp_path.resolve()
+
+    assert resolve_vault_root(tmp_path / "explicit", cfg=cfg) == (tmp_path / "explicit").resolve()
+
+
+def test_vault_root_config_points_to_obsidian():
+    """生产配置：真源落在 Obsidian vault 根，与用户记忆同库。"""
+    from liansu.config import resolve_vault_root
+
+    cfg = load_config()
+    root = resolve_vault_root(cfg=cfg)
+    assert root.name == "ObsidianVault"
+    assert (root / "journal").is_dir(), "真源目录应在 Obsidian vault 内"

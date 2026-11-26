@@ -1,5 +1,14 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# 本地配置与运行时数据（含个人信息，不入库）
+config.yaml
+vault_views/
 .liansu/
+.workbuddy/
+
+# 系统文件
+.DS_Store

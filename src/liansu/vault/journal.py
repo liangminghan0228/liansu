@@ -20,7 +20,8 @@ from liansu.schema import Fact
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    from liansu.config import resolve_vault_root
+    return resolve_vault_root()
 
 
 class Journal:
