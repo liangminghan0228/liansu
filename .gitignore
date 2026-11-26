@@ -16,3 +16,4 @@ vault_views/
 # 公开集原始数据与转换产物（体积大、遵循各自许可，本地生成）
 raw/
 eval/datasets/public/*.gold.jsonl
+eval/datasets/public/*.haystack.jsonl
