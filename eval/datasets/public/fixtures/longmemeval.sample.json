@@ -1,0 +1,42 @@
+[
+  {
+    "question_id": "q-single-1",
+    "question_type": "single-session-user",
+    "question": "What do I order in the morning?",
+    "answer": "matcha latte",
+    "question_date": "2023/05/20 (Sat) 14:00",
+    "haystack_session_ids": ["s1", "s2"],
+    "haystack_dates": ["2023/05/18 (Thu) 09:12", "2023/05/19 (Fri) 18:40"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I usually order a matcha latte in the morning, no sugar."},
+        {"role": "assistant", "content": "Noted, matcha latte with no sugar."}
+      ],
+      [
+        {"role": "user", "content": "My sister visited last weekend and we cooked pasta."},
+        {"role": "assistant", "content": "Sounds like a good weekend."}
+      ]
+    ],
+    "answer_session_ids": ["s1"]
+  },
+  {
+    "question_id": "q-update-1",
+    "question_type": "knowledge-update",
+    "question": "How many kilometers do I run in the morning now?",
+    "answer": "10 km",
+    "question_date": "2023/06/10 (Sat) 08:00",
+    "haystack_session_ids": ["u1", "u2"],
+    "haystack_dates": ["2023/03/02 (Thu) 07:30", "2023/06/08 (Thu) 07:10"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I run 5 km every morning before work."},
+        {"role": "assistant", "content": "That is a solid routine."}
+      ],
+      [
+        {"role": "user", "content": "I run 10 km every morning before work now."},
+        {"role": "assistant", "content": "You doubled the distance."}
+      ]
+    ],
+    "answer_session_ids": ["u2"]
+  }
+]

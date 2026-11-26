@@ -1,0 +1,15 @@
+[
+  {
+    "question": "Who is the CEO of Twitter?",
+    "answer": "Linda Yaccarino",
+    "outdated_answers": ["Jack Dorsey", "Parag Agrawal"],
+    "false_premise": false,
+    "fact_type": "dynamic"
+  },
+  {
+    "question": "Which planet has exactly two moons?",
+    "answer": "No planet has exactly two moons; Mars has two but Earth has one.",
+    "false_premise": true,
+    "fact_type": "false_premise"
+  }
+]

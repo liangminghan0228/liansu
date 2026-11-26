@@ -1,0 +1,28 @@
+[
+  {
+    "_id": "hp-1",
+    "question": "Are both Arthur's Magazine and First for Women published in the United States?",
+    "answer": "yes",
+    "type": "comparison",
+    "context": [
+      [
+        "Arthur's Magazine",
+        [
+          "Arthur's Magazine (1844-1846) was an American literary periodical published in Philadelphia in the 19th century.",
+          "It was edited by Timothy Shay Arthur."
+        ]
+      ],
+      [
+        "First for Women",
+        [
+          "First for Women is a woman's magazine published by Bauer Media Group in the USA.",
+          "The magazine was launched in 1989."
+        ]
+      ]
+    ],
+    "supporting_facts": [
+      ["Arthur's Magazine", 0],
+      ["First for Women", 0]
+    ]
+  }
+]

@@ -1,30 +1,87 @@
-# 公开评测集
+# 公开数据集评测
 
-本目录用于存放**公开数据集**的转换结果。当前仓库**不实际下载**原始数据（避免把大文件与许可纠葛带进 git），只约定下载来源、统一格式与转换方法。需要跑 T15 评测框架时，按下方步骤自行下载并放置到本目录。
+两块东西：**转换器**把各家原始格式变成统一 gold JSONL；**runner** 把 gold 事实灌进
+隔离 journal 再跑与自建集同一套 Stage 消融。原始数据不入库（体积与许可），
+仓库只提交转换器、fixture 样本与转换后的最小必要字段。
 
-## 统一格式
+## 为什么公开集要单独一层
 
-转换后每个数据集产出一个 JSONL 文件，每行一条，字段与自建集 `eval/datasets/own/gold.jsonl` 完全一致：
+`eval.runner` 的前提是「fact 已在 vault 里」。公开集的事实只存在于数据集本身，
+不先落进 journal 就没有东西可召回。所以 `eval.public_runner` 每题建一个临时
+journal（`--isolate case` 默认），灌 `gold_facts` + `stale_facts`，跑完即删，
+不碰用户真实 vault。
 
-```json
-{"question": "...", "gold_facts": [{"id": "...", "subject": "...", "predicate": "...", "object": "...", "statement": "...", "valid_from": "YYYY-MM-DD", "confidence": 0.9, "topics": ["..."], "source": "..."}], "answer": "...", "source": "LongMemEval"}
+## 三步跑通
+
+```bash
+# 1. 把原始数据放到 raw/（自行下载，见下表）
+#    raw/longmemeval_s.json  raw/locomo10.json  raw/hotpot_dev_distractor_v1.json  raw/freshqa_v2.json
+
+# 2. 转换 + 校验（一条命令出四个 *.gold.jsonl）
+.venv/bin/python -m eval.datasets.public.convert --dataset all --input-dir raw/
+
+# 3. 跑消融
+.venv/bin/python -m eval.public_runner --public-dir eval/datasets/public
 ```
 
-字段说明见 `docs/evalset.md`。顶层 `source` 填数据集名称（如 `LongMemEval`），以区别于自建集的 `自建`。
+不联网也想验证链路：仓库自带 `fixtures/*.sample.json`（按各家真实字段结构手写的小样本），
 
-## 下载来源与转换方法
+```bash
+for ds in longmemeval locomo hotpotqa freshqa; do
+  .venv/bin/python -m eval.datasets.public.convert --dataset $ds \
+    --input eval/datasets/public/fixtures/$ds.sample.json \
+    --output /tmp/$ds.gold.jsonl
+done
+.venv/bin/python -m eval.public_runner --public-dir /tmp
+```
 
-| 数据集 | 下载来源 | 特点 | 转换要点 |
+## 下载来源
+
+| 数据集 | 下载来源 | 用它的什么 | 转换要点 |
 |---|---|---|---|
-| **LongMemEval**（首选） | GitHub：`xiaowu0162/longmem-eval`，仓库 `data/` 目录 | 长程记忆、含知识更新/时序问题 | 取 `question`；将 `answer` 作为答案；把支撑证据（含 `session_date`）映射为 gold facts，日期写进 `valid_from`；知识更新类问题用新事实作 gold，旧事实不写入 |
-| **LoCoMo** | GitHub：`microsoft/LoCoMo` 或 `facebookresearch/LoCoMo` | 多会话对话记忆、指代与多跳 | 每条多跳问题把跨会话的支撑句拆成多条 fact；`valid_from` 用对话日期 |
-| **HotpotQA** | 官网 `hotpotqa.github.io`（`hotpot_train_v1.1.json` 等） | 维基多跳问答，BM25/图召回基线 | 用 `question`/`answer`；`context` 中两条支撑段落转成两条 fact；无真实日期时 `valid_from` 用统一占位日（如 `2000-01-01`）并在文档注明 |
-| **FreshQA** | GitHub：`freshqa`(Future-Land/Google) 官方仓库 | 含时效变化与世界知识更新 | 已有 `questions.json`；`answer` 与 `latest_answer` 取最新值；旧答案对应的实体状态转成被 supersede 的旧事实，标注 `must_not_include` |
+| **LongMemEval**（首选） | `xiaowu0162/longmem-eval` 的 `data/longmemeval_s.json` | 长程记忆、知识更新 | `answer_session_ids` → 证据会话，会话内用户陈述即 gold；`knowledge-update` 用数值冲突启发式补 stale |
+| **LoCoMo** | `snap-research/locomo` 的 `data/locomo10.json` | 多会话、跨会话多跳、对抗样本 | `evidence` 的 dia_id（`D1:3`）直接映射到会话轮次；`category == 5` → `expect=abstain` |
+| **HotpotQA** | `hotpotqa.github.io` 的 `hotpot_dev_distractor_v1.json` | 多跳、BM25/图召回基线 | `supporting_facts` 的 (title, sent_id) 定位支撑句；无时间维度，`valid_from` 用 `2000-01-01` 占位并在 `meta` 标注 |
+| **FreshQA** | `freshqa` 官方仓库的 `freshqa_v2.json` | 时效变化、假前提 | 无证据原文，只评时效（`scope=temporal`）；`outdated_answers` → stale，`false_premise` → 对抗样本 |
 
-> 通用转换脚本骨架建议放在 `eval/datasets/public/convert.py`（本任务不要求实现）：读原始 JSON → 抽取 question/answer/evidence → 用 `liansu.schema.Fact` 校验每条 gold fact → 写 JSONL。`confidence` 无原始标注时统一填 `0.9`。
+约定文件名见 `convert.DEFAULT_INPUT_NAMES`，也可以 `--input` 直接指定。
 
-## 许可与注意事项
+## 统一格式（在 docs/evalset.md §3 上向后兼容扩展）
 
-- 各数据集遵循各自 LICENSE，下载后按原许可使用；本仓库只提交转换后的最小必要字段与出处，不提交原始大数据文件。
-- 保持 `gold_facts` 为**对象数组**而非 id 数组，便于 T15 直接比对 statement 与时效字段。
-- 公开集为英文、非个人场景，用于证明方法有效；真实场景调参以自建集为主（见 TECH_DESIGN §5.9 方案 C）。
+必填仍是 `question` / `gold_facts` / `answer` / `source`；新增四个可选字段：
+
+| 字段 | 含义 |
+|---|---|
+| `must_not_include` | 旧 fact id，仅用于时效正确率判分 |
+| `stale_facts` | 旧 fact 的完整对象，**`valid_to` 必填**；灌库后由 Stage3 过滤 |
+| `expect` | `answer`（默认）｜`abstain`（对抗样本，不计入检索指标） |
+| `scope` | `retrieval`（默认）｜`temporal`（无证据原文，只评时效） |
+| `meta` | qid / category / 证据 id / 日期来源，仅溯源不判分 |
+
+三条口径，别踩：
+
+1. **公开集只评「检索 + 时效」，不评抽取**。原始数据没有 `(subject, predicate, object)`
+   标注，机械三元组会让抽取指标变成噪声，所以 `predicate` 填数据集类型标签、`object` 填答案，仅供人读。
+2. **statement 必须放证据原文**，索引只吃这段字。FreshQA 没有证据，只能拿答案当 statement，
+   所以标 `scope=temporal`，绝不拿问题原文当证据 —— 那等于让查询命中自己。
+3. **时效靠 `stale_facts` 显式给出**：LongMemEval 知识更新取更新日期，FreshQA 取统一截断日
+   `2025-01-01`。覆盖不到的类型（改城市、换公司）宁可不标，误标会污染时效分母。
+
+## 指标与现状
+
+`eval.public_runner` 复用 `eval.runner` 的 `to_markdown_table`，输出 Stage0 仅 BM25 →
+Stage1 +向量 → Stage2 +图 → Stage3 +时效 的 HitRate / Recall@k / MRR / 时效正确率 / 延迟。
+
+两个必须说明的读数限制：
+
+- 仓库当前**没有 embedder**（bge-small-zh 未接入），Stage1 与 Stage0 等价；
+  BM25 + jieba 是纯词面召回，在英文公开集上会系统性偏低 —— 这是仓库现状，不是方法结论；
+- 逐题隔离（`case`）是公开集的默认口径；`--isolate file` 会把整个数据集灌进一个索引，
+  更接近真实长期积累，但跨题事实会互相挤占 top-k，只作对照。
+
+## 自检
+
+```bash
+.venv/bin/python -m pytest tests/test_public_eval.py -q     # 24 条：转换/校验/隔离/时效消融/CLI
+.venv/bin/python -m eval.datasets.public.convert --check-only eval/datasets/public/locomo.gold.jsonl
+```

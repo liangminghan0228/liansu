@@ -6,7 +6,7 @@
 
 ## 状态
 
-17 个开发任务全部落地，**220 个单测 + 25 项端到端断言全部通过**，5 个 MCP 工具可用，`record → recall → expand` 全链路在真实 LLM 上跑通。
+17 个开发任务全部落地，**244 个单测 + 25 项端到端断言全部通过**，5 个 MCP 工具可用，`record → recall → expand` 全链路在真实 LLM 上跑通。
 
 ## 核心设计
 
@@ -130,17 +130,20 @@ cp config.example.yaml config.yaml
 ## 评测
 
 ```bash
-.venv/bin/python -m pytest tests/ -q        # 220 个单测（全 mock，约 2s）
+.venv/bin/python -m pytest tests/ -q        # 244 个单测（全 mock，约 2s）
 .venv/bin/python scripts/e2e_real.py        # 端到端真实链路（真实 LLM + bge，约 30s）
 .venv/bin/python -m eval.runner --gold eval/datasets/own/gold.jsonl --stages 0,1,2,3
 .venv/bin/python -m eval.e2e_runner --provider stub   # 抽取→落盘→召回，离线冒烟
 .venv/bin/python -m eval.e2e_runner --provider real   # 同上，走真实 LLM（测抽取质量）
+.venv/bin/python -m eval.datasets.public.convert --dataset all --input-dir raw/  # 公开集转换
+.venv/bin/python -m eval.public_runner --public-dir eval/datasets/public         # 公开集消融
 ```
 
-两套口径：
+三套口径：
 
 - `eval.runner`：**检索消融**。前提是 gold fact 已在库，Stage0 仅 BM25 → +向量 → +图 → +时效，逐级看 HitRate/Recall/MRR/时效正确率。数字待真实 vault + bge 模型到位后填入 `docs/EVAL_REPORT.md`。
 - `eval.e2e_runner`：**端到端**。从原始对话出发，跑 gate → 抽取 → confidence → supersede → 落盘 → 召回，同时判抽取 P/R、谓词规范率、supersede 是否触发、旧值残留、命中与时效。`--provider stub` 只用标注验证评测链路（指标必然接近满分，不作结论），`--provider real` 才是模型能力数字。详见 `docs/e2e-eval.md`。
+- `eval.public_runner`：**公开集**。LongMemEval / LoCoMo / HotpotQA / FreshQA 的事实只存在于数据集里，先由 `eval.datasets.public.convert` 转成统一格式，再把 gold 灌进逐题隔离的临时 journal 跑同一套 Stage 消融；只评检索+时效、不评抽取。原始数据自行下载、不入库。详见 `eval/datasets/public/README.md`。
 
 端到端测试（`scripts/e2e_real.py`）走 `build_context()` 生产装配，从 MCP 协议层进入，覆盖 record → 真源 → 三路索引 → 消融检索 → expand → 视图 → rebuild → 幂等 → stdio 子进程共 25 项断言。首轮跑通即发现并修复 5 个 mock 测不出的缺陷（fact id 跨批重复、模型编造日期、`"null"` 字符串、SQLite 跨线程、source 被覆盖），详见 `docs/E2E_REPORT.md`。
 

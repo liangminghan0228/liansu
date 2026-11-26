@@ -12,12 +12,16 @@ eval/datasets/
 │   ├── gold.jsonl        # 检索集（24 条 question，gold fact 已在库）
 │   └── e2e.jsonl         # 端到端集（5 条对话，抽取→落盘→召回，见 docs/e2e-eval.md）
 └── public/
-    └── README.md         # 公开集下载来源与转换说明（不实际下载）
+    ├── README.md         # 下载来源、三步跑通、口径限制
+    ├── convert.py        # 四个数据集 → 统一格式 + 校验 + CLI
+    ├── fixtures/         # 按各家真实字段手写的小样本（不联网可跑）
+    └── *.gold.jsonl      # 转换产物（自行生成，不入库）
 ```
 
 > `gold.jsonl` 与 `e2e.jsonl` 是两套口径：前者按 fact **id** 比对（前提是 fact 已经在库里），
 > 后者从原始对话出发，按 `(subject, predicate, object)` **语义**比对（抽取出的 id 是随机生成的，
 > 无法预知）。字段与判分差异见 `docs/e2e-eval.md`。
+> 第三套是公开集：事实不在 vault 里，由 `eval.public_runner` 灌进临时 journal 后按 id 比对，见 §7。
 
 ## 3. 统一格式
 
@@ -99,12 +103,37 @@ eval/datasets/
 
 ## 7. 公开集
 
-见 `eval/datasets/public/README.md`：列出 LongMemEval（首选，含时序/知识更新）、LoCoMo、HotpotQA、FreshQA 的下载来源与转换为统一格式的方法。本仓库不实际下载原始数据。
+公开集**只评「检索 + 时效」，不评抽取**：原始数据没有 `(subject, predicate, object)` 标注，机械三元组会让抽取指标变成噪声。
+
+链路三段，缺一不可：
+
+```
+原始 JSON ──convert.py──▶ *.gold.jsonl ──public_runner──▶ 临时 journal ──run_ablation──▶ 消融表
+            统一格式+校验                 逐题隔离、跑完即删        与自建集同一套指标
+```
+
+```bash
+.venv/bin/python -m eval.datasets.public.convert --dataset all --input-dir raw/
+.venv/bin/python -m eval.public_runner --public-dir eval/datasets/public
+```
+
+在 §3 格式上新增四个可选字段（向后兼容，自建集不用）：
+
+| 字段 | 含义 |
+|---|---|
+| `stale_facts` | 旧 fact 完整对象，**`valid_to` 必填**；灌库后由 Stage3 过滤 |
+| `must_not_include` | 旧 fact id，仅用于时效正确率判分 |
+| `expect` | `answer`（默认）｜`abstain`（对抗样本，不计入检索指标） |
+| `scope` | `retrieval`（默认）｜`temporal`（无证据原文，只评时效） |
+
+口径要点：`statement` 必须放证据原文；FreshQA 没有证据，只能拿答案当 statement，故标 `scope=temporal`，绝不拿问题原文当证据（那等于让查询命中自己）。下载来源与各数据集转换要点见 `eval/datasets/public/README.md`。
 
 ## 8. 校验
 
 ```bash
-./.venv/bin/python -m pytest tests/test_evalset.py -q
+./.venv/bin/python -m pytest tests/test_evalset.py tests/test_public_eval.py -q
 ```
 
-覆盖：JSON 可解析、四字段齐全、question/answer/gold_facts 非空、fact 最小 schema 字段与类型、confidence 范围、`vault://` 前缀、时效性样本 ≥10、旧 id 不出现在 gold_facts。
+自建集覆盖：JSON 可解析、四字段齐全、question/answer/gold_facts 非空、fact 最小 schema 字段与类型、confidence 范围、`vault://` 前缀、时效性样本 ≥10、旧 id 不出现在 gold_facts。
+
+公开集覆盖：日期解析、证据映射（会话/dia_id/支撑句）、旧值与对抗样本标注、id 可复现、坏数据校验（stale 缺 `valid_to`、旧 id 混进 gold、abstain 带 gold）、逐题隔离不串题、旧值 Stage0 泄露而 Stage3 过滤、两个 CLI 端到端。

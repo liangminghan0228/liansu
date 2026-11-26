@@ -12,3 +12,7 @@ vault_views/
 
 # 系统文件
 .DS_Store
+
+# 公开集原始数据与转换产物（体积大、遵循各自许可，本地生成）
+raw/
+eval/datasets/public/*.gold.jsonl
